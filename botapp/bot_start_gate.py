@@ -411,7 +411,7 @@ async def enforce_bot_start_message(
                 f"• کاربر {mention}\n\n"
                 "• برای ارسال پیام باید در Tinkera Robot عضو شوید.\n\n"
                 "• لطفاً با استفاده از دکمه زیر ربات را استارت کنید!\n"
-                "در غیر این صورت پیام بعدی شما پاک می‌شود."
+                "در غیر این صورت پیام بعدی شما نیز پاک می‌شود."
             )
         reservation = await _reserve_notice(decision.state_id)
         if reservation is None:
@@ -423,12 +423,16 @@ async def enforce_bot_start_message(
                 await bot.delete_message(message.chat.id, previous_message_id)
             except TelegramAPIError:
                 pass
+        # delete user message before sending warning notice
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except TelegramAPIError:
+            pass
         try:
             notice = await bot.send_message(
                 chat_id=message.chat.id,
                 text=text,
                 parse_mode="HTML",
-                reply_to_message_id=message.message_id,
                 reply_markup=keyboard,
             )
         except TelegramAPIError:

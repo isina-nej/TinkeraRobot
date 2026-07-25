@@ -522,8 +522,7 @@ async def start(message: Message, bot: Bot):
                 await bot.delete_message(chat_id, message_id)
             except (TelegramBadRequest, TelegramForbiddenError):
                 pass
-        if first_start:
-            await message.answer(WELCOME_TEXT)
+        await message.answer(WELCOME_TEXT)
 
 
 @router.message(Command("rules"))
