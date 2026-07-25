@@ -26,6 +26,7 @@ from django.utils import timezone
 from botapp.services import (
     add_warning,
     call_ai_api as request_ai_answer,
+    call_tina_api,
     clear_warnings,
     contains_blocked_word,
     consume_group_quota,
@@ -1389,6 +1390,46 @@ async def handle_text_message(message: Message, bot: Bot):
 
     group = await get_or_create_group_settings(message.chat.id, message.chat.title or "")
     if await process_moderation(message, bot, group):
+        return
+
+    if not message.text:
+        return
+
+    text_lower = message.text.lower().strip()
+    bot_info = await bot.me()
+    bot_mention = f"@{bot_info.username}".lower()
+    
+    # Check if the message is invoking Tina
+    is_tina = False
+    question = ""
+    
+    if text_lower.startswith("تینا"):
+        is_tina = True
+        question = message.text[4:].strip()
+    elif text_lower.startswith("tina"):
+        is_tina = True
+        question = message.text[4:].strip()
+    elif text_lower.startswith(bot_mention):
+        is_tina = True
+        question = message.text[len(bot_mention):].strip()
+    elif message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id:
+        # Replying directly to the bot
+        is_tina = True
+        question = message.text.strip()
+
+    if is_tina and question:
+        if not group.collaboration_enabled:
+            await message.reply(collaboration_disabled_message())
+            return
+        if not await consume_group_quota(message.chat.id, message.chat.title or ""):
+            await message.reply(
+                f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است."
+            )
+            return
+            
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        answer = await call_tina_api(question, session_id=f"telegram:{message.chat.id}")
+        await message.reply(answer)
         return
 
     command_name, args = plain_command(message.text)

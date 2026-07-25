@@ -187,6 +187,29 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
         return True
 
 
+async def call_tina_api(question: str, session_id: str) -> str:
+    url = "https://9router.tinkera.org/v1/chat/completions"
+    headers = {
+        "Authorization": "Bearer sk-6cf9c2d24721ff2f-2gpm4n-556acb70",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "TinkeraBot",
+        "messages": [{"role": "user", "content": question}]
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+    except httpx.TimeoutException:
+        return "زمان پاسخ تمام شد. لطفا دوباره تلاش کنید."
+    except Exception as e:
+        logger.exception("Tina AI API request failed")
+        return "خطا در ارتباط با تینا. لطفا دوباره تلاش کنید."
+
+
 async def call_ai_api(api_url: str, question: str, session_id: str) -> str:
     payload = {
         "sessionId": session_id,
