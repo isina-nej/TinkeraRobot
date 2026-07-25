@@ -123,12 +123,15 @@ def _service_or_exempt(message: Message) -> bool:
     }
     return bool(
         not user
-        or user.is_bot
+        or (user.is_bot and message.sender_chat is None)
         or (
             getattr(message, "content_type", None) is not None
             and message.content_type not in user_content_types
         )
-        or message.sender_chat is not None
+        or (
+            message.sender_chat is not None
+            and message.sender_chat.id == message.chat.id
+        )
         or message.new_chat_members
         or message.left_chat_member
         or message.pinned_message
@@ -170,6 +173,11 @@ def _prepare_decision(
 ) -> BotStartDecision:
     now = timezone.now()
     with transaction.atomic():
+        user, _ = TelegramUser.objects.select_for_update().get_or_create(
+            telegram_user_id=user_id,
+        )
+        if user.started and not user.blocked:
+            return BotStartDecision(action="allow")
         state, _ = GroupUserGateState.objects.select_for_update().get_or_create(
             group_id=group_id,
             telegram_user_id=user_id,
@@ -252,6 +260,15 @@ def _warning_failed(event_id: int):
 @sync_to_async(thread_sensitive=True)
 def _event_failed(event_id: int):
     BotStartGateEvent.objects.filter(pk=event_id).update(
+        status="failed",
+        updated_at=timezone.now(),
+    )
+
+
+@sync_to_async(thread_sensitive=True)
+def _deletion_failed(event_id: int):
+    BotStartGateEvent.objects.filter(pk=event_id).update(
+        action="retry_delete",
         status="failed",
         updated_at=timezone.now(),
     )
@@ -421,6 +438,8 @@ async def enforce_bot_start_message(
         telegram_update_id=telegram_update_id,
         blocked=blocked,
     )
+    if decision.action == "allow":
+        return False
     if decision.action == "duplicate":
         if getattr(message, "media_group_id", None):
             try:
@@ -493,12 +512,14 @@ async def enforce_bot_start_message(
             await _warning_completed(decision.event_id)
             if deleted:
                 await _mark_deleted(decision.state_id, decision.event_id)
+            else:
+                await _deletion_failed(decision.event_id)
         return True
 
     try:
         await bot.delete_message(message.chat.id, message.message_id)
     except _TELEGRAM_CALL_ERRORS:
-        await _event_failed(decision.event_id)
+        await _deletion_failed(decision.event_id)
         logger.exception("Bot-start delete failed for message %s", message.message_id)
         return True
     await _mark_deleted(decision.state_id, decision.event_id)

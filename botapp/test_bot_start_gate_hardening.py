@@ -45,6 +45,18 @@ class BotStartGateHardeningTest(TestCase):
         ] * 20
         return bot
 
+    def test_only_real_anonymous_admin_sender_chat_is_exempt(self):
+        from botapp.bot_start_gate import _service_or_exempt
+
+        anonymous_admin = self.message(1)
+        anonymous_admin.sender_chat = SimpleNamespace(id=anonymous_admin.chat.id)
+        external_channel = self.message(2)
+        external_channel.sender_chat = SimpleNamespace(id=-100999)
+        external_channel.from_user = SimpleNamespace(id=777000, is_bot=True)
+
+        assert _service_or_exempt(anonymous_admin) is True
+        assert _service_or_exempt(external_channel) is False
+
     def test_signed_deep_link_is_short_scoped_and_expires(self):
         from botapp.bot_start_gate import deep_link_payload, parse_deep_link_payload
 
@@ -100,6 +112,43 @@ class BotStartGateHardeningTest(TestCase):
         ) is False
         user = TelegramUser.objects.get(telegram_user_id=42)
         assert user.started is True and user.blocked is False
+
+    def test_failed_first_delete_is_retried_without_second_warning(self):
+        from botapp.bot_start_gate import enforce_bot_start_message
+
+        bot = self.bot()
+        bot.delete_message.side_effect = [
+            TelegramNetworkError(method=AsyncMock(), message="offline"),
+            None,
+        ]
+        message = self.message(9)
+
+        assert async_to_sync(enforce_bot_start_message)(
+            message, bot, bot_username="NuyaRobot"
+        ) is True
+        assert async_to_sync(enforce_bot_start_message)(
+            message, bot, bot_username="NuyaRobot"
+        ) is True
+
+        assert bot.delete_message.await_count == 2
+        assert bot.send_message.await_count == 1
+
+    def test_started_state_wins_over_stale_group_context(self):
+        from botapp.bot_start_gate import _prepare_decision, mark_user_started
+
+        TelegramUser.objects.create(telegram_user_id=42, started=False)
+        async_to_sync(mark_user_started)(42)
+
+        decision = async_to_sync(_prepare_decision)(
+            self.group.id,
+            42,
+            message_id=10,
+            telegram_update_id=10,
+            blocked=False,
+        )
+
+        assert decision.action == "allow"
+        assert BotStartGateEvent.objects.count() == 0
 
     def test_ten_rapid_messages_are_all_deleted_with_one_warning(self):
         from botapp.bot_start_gate import enforce_bot_start_message
