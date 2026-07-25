@@ -188,17 +188,18 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
 
 
 async def call_tina_api(question: str, session_id: str) -> str:
-    url = "https://9router.tinkera.org/v1/chat/completions"
+    url = "http://127.0.0.1:20128/v1/chat/completions"
     headers = {
         "Authorization": "Bearer sk-6cf9c2d24721ff2f-2gpm4n-556acb70",
         "Content-Type": "application/json"
     }
     payload = {
         "model": "TinkeraBot",
+        "stream": False,
         "messages": [{"role": "user", "content": question}]
     }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
