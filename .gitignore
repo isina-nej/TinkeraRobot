@@ -1,0 +1,13 @@
+.env
+.venv/
+.deploy_bundle/
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+*.sqlite3
+botapp_data.json
+staticfiles/
+.coverage
+.pytest_cache/
+.mypy_cache/
