@@ -530,3 +530,13 @@ class HealthcheckTest(TestCase):
         response = self.client.get(reverse("healthcheck"))
         assert response.status_code == 200
         assert response.content == b"ok"
+
+    def test_healthcheck_behind_https_proxy_does_not_redirect(self):
+        with self.settings(DEBUG=False, SECURE_SSL_REDIRECT=True):
+            response = self.client.get(
+                reverse("healthcheck"),
+                HTTP_X_FORWARDED_PROTO="https",
+            )
+
+        assert response.status_code == 200
+        assert response.content == b"ok"
