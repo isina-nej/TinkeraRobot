@@ -150,6 +150,79 @@ class BotStartGateHardeningTest(TestCase):
         assert decision.action == "allow"
         assert BotStartGateEvent.objects.count() == 0
 
+    def test_start_during_warning_delivery_removes_new_warning(self):
+        from botapp.bot_start_gate import enforce_bot_start_message, mark_user_started
+        from botapp.models import GroupUserGateState
+
+        bot = self.bot()
+
+        async def start_then_return_notice(**kwargs):
+            await mark_user_started(42)
+            return SimpleNamespace(message_id=701)
+
+        bot.send_message.side_effect = start_then_return_notice
+
+        assert async_to_sync(enforce_bot_start_message)(
+            self.message(11), bot, bot_username="NuyaRobot"
+        ) is True
+
+        state = GroupUserGateState.objects.get(group=self.group, telegram_user_id=42)
+        assert state.warning_message_id is None
+        assert state.warning_sent_at is None
+        bot.delete_message.assert_any_await(-100123, 701)
+
+    def test_failed_race_warning_cleanup_is_retried(self):
+        from botapp.bot_start_gate import cleanup_due_notices, enforce_bot_start_message, mark_user_started
+        from botapp.models import GroupUserGateState
+
+        bot = self.bot()
+
+        async def start_then_return_notice(**kwargs):
+            await mark_user_started(42)
+            return SimpleNamespace(message_id=703)
+
+        bot.send_message.side_effect = start_then_return_notice
+        bot.delete_message.side_effect = [
+            None,
+            TelegramNetworkError(method=AsyncMock(), message="offline"),
+            None,
+        ]
+
+        assert async_to_sync(enforce_bot_start_message)(
+            self.message(13), bot, bot_username="NuyaRobot"
+        ) is True
+
+        event = BotStartGateEvent.objects.get(group=self.group, message_id=703)
+        assert event.action == "cleanup_notice"
+        assert event.status == "failed"
+
+        assert async_to_sync(cleanup_due_notices)(bot) == 1
+        event.refresh_from_db()
+        assert event.status == "completed"
+
+    def test_stale_empty_notice_reservation_is_retried(self):
+        from botapp.bot_start_gate import enforce_bot_start_message
+        from botapp.models import GroupUserGateState
+
+        stale = timezone.now() - timedelta(seconds=31)
+        GroupUserGateState.objects.create(
+            group=self.group,
+            telegram_user_id=42,
+            warning_pending_at=stale,
+            last_warning_update_at=stale,
+        )
+        bot = self.bot()
+        bot.send_message.return_value = SimpleNamespace(message_id=702)
+
+        assert async_to_sync(enforce_bot_start_message)(
+            self.message(12), bot, bot_username="NuyaRobot"
+        ) is True
+
+        state = GroupUserGateState.objects.get(group=self.group, telegram_user_id=42)
+        bot.send_message.assert_awaited_once()
+        assert state.warning_message_id == 702
+        assert state.warning_sent_at is not None
+
     def test_ten_rapid_messages_are_all_deleted_with_one_warning(self):
         from botapp.bot_start_gate import enforce_bot_start_message
 

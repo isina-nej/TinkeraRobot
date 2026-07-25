@@ -275,8 +275,9 @@ def _deletion_failed(event_id: int):
 
 
 @sync_to_async(thread_sensitive=True)
-def _warning_completed(event_id: int):
+def _warning_completed(event_id: int, user_id: int):
     with transaction.atomic():
+        user = TelegramUser.objects.select_for_update().get(telegram_user_id=user_id)
         event = BotStartGateEvent.objects.select_for_update().get(pk=event_id)
         state = GroupUserGateState.objects.select_for_update().get(
             group=event.group,
@@ -292,7 +293,7 @@ def _warning_completed(event_id: int):
             status="pending",
         ).update(status="failed", updated_at=now)
         state.warning_pending_at = None
-        state.warning_sent_at = now
+        state.warning_sent_at = None if user.started and not user.blocked else now
         state.save(update_fields=["warning_pending_at", "warning_sent_at", "updated_at"])
 
 
@@ -312,7 +313,8 @@ def _reserve_notice(state_id: int):
     now = timezone.now()
     with transaction.atomic():
         state = GroupUserGateState.objects.select_for_update().get(pk=state_id)
-        if state.last_warning_update_at and state.last_warning_update_at > now - NOTICE_TTL:
+        reservation_ttl = NOTICE_TTL if state.warning_message_id else timedelta(seconds=30)
+        if state.last_warning_update_at and state.last_warning_update_at > now - reservation_ttl:
             return None
         previous_message_id = state.warning_message_id
         state.last_warning_update_at = now
@@ -321,15 +323,18 @@ def _reserve_notice(state_id: int):
 
 
 @sync_to_async(thread_sensitive=True)
-def _record_notice(state_id: int, reserved_at, message_id: int):
-    GroupUserGateState.objects.filter(
-        pk=state_id,
-        last_warning_update_at=reserved_at,
-    ).update(
-        warning_message_id=message_id,
-        notice_delete_at=reserved_at + NOTICE_TTL,
-        updated_at=timezone.now(),
-    )
+def _record_notice(state_id: int, user_id: int, reserved_at, message_id: int) -> bool:
+    with transaction.atomic():
+        user = TelegramUser.objects.select_for_update().get(telegram_user_id=user_id)
+        state = GroupUserGateState.objects.select_for_update().get(pk=state_id)
+        if user.started and not user.blocked:
+            return False
+        if state.last_warning_update_at != reserved_at:
+            return False
+        state.warning_message_id = message_id
+        state.notice_delete_at = reserved_at + NOTICE_TTL
+        state.save(update_fields=["warning_message_id", "notice_delete_at", "updated_at"])
+        return True
 
 
 @sync_to_async(thread_sensitive=True)
@@ -358,6 +363,37 @@ def clear_notice_record(state_id: int, message_id: int):
     ).update(warning_message_id=None, notice_delete_at=None, updated_at=timezone.now())
 
 
+@sync_to_async(thread_sensitive=True)
+def _queue_notice_cleanup(group_id: int, user_id: int, message_id: int) -> int:
+    event, _ = BotStartGateEvent.objects.update_or_create(
+        group_id=group_id,
+        message_id=message_id,
+        defaults={
+            "telegram_user_id": user_id,
+            "action": "cleanup_notice",
+            "status": "failed",
+        },
+    )
+    return event.id
+
+
+@sync_to_async(thread_sensitive=True)
+def _due_notice_cleanup_events(limit: int = 100):
+    return list(
+        BotStartGateEvent.objects.select_related("group")
+        .filter(action="cleanup_notice", status="failed")
+        .values_list("id", "group__chat_id", "message_id")[:limit]
+    )
+
+
+@sync_to_async(thread_sensitive=True)
+def _complete_notice_cleanup_event(event_id: int):
+    BotStartGateEvent.objects.filter(pk=event_id).update(
+        status="completed",
+        updated_at=timezone.now(),
+    )
+
+
 async def cleanup_due_notices(bot, *, limit: int = 100) -> int:
     cleaned = 0
     for state_id, chat_id, message_id in await _due_notices(limit):
@@ -369,6 +405,15 @@ async def cleanup_due_notices(bot, *, limit: int = 100) -> int:
             logger.exception("Bot-start notice cleanup failed for message %s", message_id)
             continue
         await clear_notice_record(state_id, message_id)
+        cleaned += 1
+    for event_id, chat_id, message_id in await _due_notice_cleanup_events(limit):
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except TelegramBadRequest:
+            pass
+        except _TELEGRAM_CALL_ERRORS:
+            continue
+        await _complete_notice_cleanup_event(event_id)
         cleaned += 1
     return cleaned
 
@@ -479,7 +524,7 @@ async def enforce_bot_start_message(
             )
         reservation = await _reserve_notice(decision.state_id)
         if reservation is None:
-            await _warning_completed(decision.event_id)
+            await _warning_completed(decision.event_id, message.from_user.id)
             return True
         reserved_at, previous_message_id = reservation
         deleted = False
@@ -502,14 +547,27 @@ async def enforce_bot_start_message(
             logger.exception("Bot-start first warning failed for message %s", message.message_id)
         else:
             warning_message_id = getattr(notice, "message_id", None)
-            if isinstance(warning_message_id, int):
-                await _record_notice(decision.state_id, reserved_at, warning_message_id)
-            if previous_message_id:
+            recorded = isinstance(warning_message_id, int) and await _record_notice(
+                decision.state_id,
+                message.from_user.id,
+                reserved_at,
+                warning_message_id,
+            )
+            if not recorded and isinstance(warning_message_id, int):
+                try:
+                    await bot.delete_message(message.chat.id, warning_message_id)
+                except _TELEGRAM_CALL_ERRORS:
+                    await _queue_notice_cleanup(
+                        group.id,
+                        message.from_user.id,
+                        warning_message_id,
+                    )
+            elif previous_message_id:
                 try:
                     await bot.delete_message(message.chat.id, previous_message_id)
                 except _TELEGRAM_CALL_ERRORS:
                     pass
-            await _warning_completed(decision.event_id)
+            await _warning_completed(decision.event_id, message.from_user.id)
             if deleted:
                 await _mark_deleted(decision.state_id, decision.event_id)
             else:
@@ -552,9 +610,22 @@ async def enforce_bot_start_message(
         logger.exception("Bot-start deletion notice failed for message %s", message.message_id)
     else:
         warning_message_id = getattr(notice, "message_id", None)
-        if isinstance(warning_message_id, int):
-            await _record_notice(decision.state_id, reserved_at, warning_message_id)
-        if previous_message_id:
+        recorded = isinstance(warning_message_id, int) and await _record_notice(
+            decision.state_id,
+            message.from_user.id,
+            reserved_at,
+            warning_message_id,
+        )
+        if not recorded and isinstance(warning_message_id, int):
+            try:
+                await bot.delete_message(message.chat.id, warning_message_id)
+            except _TELEGRAM_CALL_ERRORS:
+                await _queue_notice_cleanup(
+                    group.id,
+                    message.from_user.id,
+                    warning_message_id,
+                )
+        elif previous_message_id:
             try:
                 await bot.delete_message(message.chat.id, previous_message_id)
             except _TELEGRAM_CALL_ERRORS:
