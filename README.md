@@ -1,4 +1,4 @@
-# Group Bot
+# TinkeraRobot
 
 ربات مدیریت گروه تلگرام با Django و aiogram؛ شامل moderation قابل تنظیم برای هر گروه، سهمیه هوش مصنوعی و پنل Django.
 
