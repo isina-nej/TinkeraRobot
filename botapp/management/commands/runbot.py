@@ -1052,29 +1052,19 @@ async def prompt(message: Message, command: CommandObject):
     chat = message.chat
     user = message.from_user
 
-    group = await get_or_create_group_settings(chat.id, chat.title or "")
-    if not group.collaboration_enabled:
-        await message.reply(collaboration_disabled_message())
-        return
-
-    if chat.type == ChatType.PRIVATE:
-        await message.reply("باید در گروهی که ربات ادمینه ارسال کنید.")
-        return
-
-
     question = action_reason(command)
     if not question:
         await message.reply("استفاده: /prompt سوال شما")
         return
 
-    if not await consume_group_quota(chat.id, chat.title or ""):
-        await message.reply(
-            f"گروه {chat.title or chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
-        )
+    if chat.type == ChatType.PRIVATE:
+        await message.bot.send_chat_action(chat_id=chat.id, action="typing")
+        answer = await call_tina_api(question, session_id=f"telegram:{chat.id}")
+        await message.reply(answer)
         return
 
     await message.bot.send_chat_action(chat_id=chat.id, action="typing")
-    answer = await call_ai_api(question, session_id=f"telegram:{chat.id}")
+    answer = await call_tina_api(question, session_id=f"telegram:{chat.id}")
     await message.reply(answer)
 
 
@@ -1418,15 +1408,6 @@ async def handle_text_message(message: Message, bot: Bot):
         question = message.text.strip()
 
     if is_tina and question:
-        if not group.collaboration_enabled:
-            await message.reply(collaboration_disabled_message())
-            return
-        if not await consume_group_quota(message.chat.id, message.chat.title or ""):
-            await message.reply(
-                f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است."
-            )
-            return
-            
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         answer = await call_tina_api(question, session_id=f"telegram:{message.chat.id}")
         await message.reply(answer)
