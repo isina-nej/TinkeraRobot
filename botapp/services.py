@@ -199,7 +199,7 @@ async def call_tina_api(question: str, session_id: str) -> str:
         "messages": [{"role": "user", "content": question}]
     }
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=None) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
