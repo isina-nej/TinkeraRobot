@@ -57,10 +57,10 @@ class BotStartGateRuntimeTest(TestCase):
         bot = self.bot()
 
         first = async_to_sync(enforce_bot_start_message)(
-            self.message(1), bot, bot_username="TinkeraRobot"
+            self.message(1), bot, bot_username="NuyaRobot"
         )
         second = async_to_sync(enforce_bot_start_message)(
-            self.message(2), bot, bot_username="TinkeraRobot"
+            self.message(2), bot, bot_username="NuyaRobot"
         )
 
         state = BotStartUserState.objects.get(group=self.group, telegram_user_id=42)
@@ -72,7 +72,7 @@ class BotStartGateRuntimeTest(TestCase):
         assert first_send.kwargs["reply_to_message_id"] == 1
         assert "&lt;Ali&gt;" in first_send.kwargs["text"]
         assert first_send.kwargs["reply_markup"].inline_keyboard[0][0].url == (
-            "https://t.me/TinkeraRobot?start=g_100123"
+            "https://t.me/NuyaRobot?start=g_100123"
         )
         assert state.warning_sent_at is not None
         assert state.message_deleted_count == 1
@@ -90,7 +90,7 @@ class BotStartGateRuntimeTest(TestCase):
         bot.send_chat_action.return_value = True
 
         blocked = async_to_sync(enforce_bot_start_message)(
-            self.message(3), bot, bot_username="TinkeraRobot"
+            self.message(3), bot, bot_username="NuyaRobot"
         )
 
         assert blocked is False
@@ -132,7 +132,7 @@ class BotStartGateRuntimeTest(TestCase):
 
         assert bot.send_message.await_count == 2
         assert bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].url.startswith(
-            "https://t.me/TinkeraRobot?start="
+            "https://t.me/NuyaRobot?start="
         )
 
     def test_due_notice_cleanup_survives_restart(self):
@@ -173,10 +173,10 @@ class BotStartGateRuntimeTest(TestCase):
         ]
 
         async_to_sync(enforce_bot_start_message)(
-            self.message(4), bot, bot_username="TinkeraRobot"
+            self.message(4), bot, bot_username="NuyaRobot"
         )
         async_to_sync(enforce_bot_start_message)(
-            self.message(5, second_group.chat_id), bot, bot_username="TinkeraRobot"
+            self.message(5, second_group.chat_id), bot, bot_username="NuyaRobot"
         )
 
         assert BotStartUserState.objects.filter(telegram_user_id=42).count() == 2
@@ -202,10 +202,10 @@ class BotStartGateRuntimeTest(TestCase):
         )
 
         first = async_to_sync(enforce_bot_start_message)(
-            self.message(6), bot, bot_username="TinkeraRobot"
+            self.message(6), bot, bot_username="NuyaRobot"
         )
         second = async_to_sync(enforce_bot_start_message)(
-            self.message(7), bot, bot_username="TinkeraRobot"
+            self.message(7), bot, bot_username="NuyaRobot"
         )
 
         user = TelegramUser.objects.get(user_id=42)
@@ -256,7 +256,7 @@ class BotStartGateRuntimeTest(TestCase):
         bot = self.bot()
         bot.send_message.side_effect = TelegramNetworkError(method=AsyncMock(), message="offline")
         assert async_to_sync(enforce_bot_start_message)(
-            self.message(8), bot, bot_username="TinkeraRobot"
+            self.message(8), bot, bot_username="NuyaRobot"
         ) is True
         state = BotStartUserState.objects.get(group=self.group, telegram_user_id=42)
         assert state.warning_sent_at is None
@@ -266,7 +266,7 @@ class BotStartGateRuntimeTest(TestCase):
         bot = self.bot()
         bot.delete_message.side_effect = TelegramNetworkError(method=AsyncMock(), message="offline")
         assert async_to_sync(enforce_bot_start_message)(
-            self.message(9), bot, bot_username="TinkeraRobot"
+            self.message(9), bot, bot_username="NuyaRobot"
         ) is True
         state.refresh_from_db()
         assert state.message_deleted_count == 0
@@ -278,10 +278,10 @@ class BotStartGateRuntimeTest(TestCase):
         message = self.message(10)
 
         first = async_to_sync(enforce_bot_start_message)(
-            message, bot, bot_username="TinkeraRobot", telegram_update_id=501
+            message, bot, bot_username="NuyaRobot", telegram_update_id=501
         )
         duplicate = async_to_sync(enforce_bot_start_message)(
-            message, bot, bot_username="TinkeraRobot", telegram_update_id=501
+            message, bot, bot_username="NuyaRobot", telegram_update_id=501
         )
 
         assert first is True and duplicate is True
@@ -322,7 +322,7 @@ class BotStartGateRuntimeTest(TestCase):
 
         async def scenario():
             second = asyncio.create_task(enforce_bot_start_message(
-                self.message(15), bot, bot_username="TinkeraRobot", telegram_update_id=702
+                self.message(15), bot, bot_username="NuyaRobot", telegram_update_id=702
             ))
             await asyncio.sleep(0.05)
             assert second.done() is False
@@ -350,9 +350,9 @@ class BotStartGateRuntimeTest(TestCase):
     def test_official_username_and_exact_welcome_text(self):
         from botapp.bot_start_gate import OFFICIAL_BOT_USERNAME, WELCOME_TEXT, start_keyboard
 
-        assert OFFICIAL_BOT_USERNAME == "TinkeraRobot"
+        assert OFFICIAL_BOT_USERNAME == "NuyaRobot"
         assert start_keyboard("wrong_name", -100123).inline_keyboard[0][0].url == (
-            "https://t.me/TinkeraRobot?start=g_100123"
+            "https://t.me/NuyaRobot?start=g_100123"
         )
         assert WELCOME_TEXT == (
             "به ربات تینکرا خوش اومدی. 🚀\n\n"
@@ -387,7 +387,7 @@ class BotStartGateRuntimeTest(TestCase):
         from botapp.management.commands.runbot import build_dispatcher, router as main_router
 
         try:
-            dispatcher = build_dispatcher("TinkeraRobot")
+            dispatcher = build_dispatcher("NuyaRobot")
             middlewares = dispatcher.message.outer_middleware._middlewares
             assert isinstance(middlewares[0], ForcedMembershipMiddleware)
             assert isinstance(middlewares[1], BotStartGateMiddleware)
@@ -416,7 +416,7 @@ class BotStartGateRuntimeTest(TestCase):
         ]
         handler = AsyncMock(return_value="handled")
 
-        result = async_to_sync(BotStartGateMiddleware("TinkeraRobot"))(
+        result = async_to_sync(BotStartGateMiddleware("NuyaRobot"))(
             handler,
             event,
             {"bot": bot},
@@ -444,7 +444,7 @@ class BotStartGateRuntimeTest(TestCase):
         bot.send_chat_action = AsyncMock()
         bot.delete_message = AsyncMock()
 
-        dispatcher = build_dispatcher("TinkeraRobot")
+        dispatcher = build_dispatcher("NuyaRobot")
         user = User(id=42, is_bot=False, first_name="<Ali>")
         group_update = Update(
             update_id=100,
@@ -493,7 +493,7 @@ class BotStartGateRuntimeTest(TestCase):
             self.member("creator"),
         ]
         assert async_to_sync(enforce_bot_start_message)(
-            self.message(6), bot, bot_username="TinkeraRobot"
+            self.message(6), bot, bot_username="NuyaRobot"
         ) is False
 
         admin_bot = AsyncMock()
@@ -503,7 +503,7 @@ class BotStartGateRuntimeTest(TestCase):
             self.member("creator"),
         ]
         assert async_to_sync(enforce_bot_start_message)(
-            self.message(7), admin_bot, bot_username="TinkeraRobot"
+            self.message(7), admin_bot, bot_username="NuyaRobot"
         ) is False
 
         bot_user_message = self.message(8)
@@ -515,12 +515,12 @@ class BotStartGateRuntimeTest(TestCase):
         plain_bot = AsyncMock()
         plain_bot.id = 999
         assert async_to_sync(enforce_bot_start_message)(
-            bot_user_message, plain_bot, bot_username="TinkeraRobot"
+            bot_user_message, plain_bot, bot_username="NuyaRobot"
         ) is False
         assert async_to_sync(enforce_bot_start_message)(
-            service_message, plain_bot, bot_username="TinkeraRobot"
+            service_message, plain_bot, bot_username="NuyaRobot"
         ) is False
         assert async_to_sync(enforce_bot_start_message)(
-            anonymous_admin_message, plain_bot, bot_username="TinkeraRobot"
+            anonymous_admin_message, plain_bot, bot_username="NuyaRobot"
         ) is False
         plain_bot.get_chat_member.assert_not_awaited()

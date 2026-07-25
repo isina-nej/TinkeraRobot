@@ -16,7 +16,7 @@ from botapp.models import BotStartGateEvent, BotStartUserState, GroupSettings, T
 
 logger = logging.getLogger(__name__)
 _ADMIN_STATUSES = {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR, "creator", "administrator"}
-OFFICIAL_BOT_USERNAME = "TinkeraRobot"
+OFFICIAL_BOT_USERNAME = "NuyaRobot"
 NOTICE_TTL = timedelta(minutes=3)
 WELCOME_TEXT = """به ربات تینکرا خوش اومدی. 🚀
 
@@ -403,13 +403,13 @@ async def enforce_bot_start_message(
         if decision.blocked:
             text = (
                 f"• کاربر {mention}\n\n"
-                "• شما ارتباط با Tinkera Robot را مسدود کرده‌اید.\n\n"
+                "• شما ارتباط با Nuya را مسدود کرده‌اید.\n\n"
                 "• برای ارسال پیام ابتدا ربات را از حالت Block خارج کرده و دوباره Start کنید."
             )
         else:
             text = (
                 f"• کاربر {mention}\n\n"
-                "• برای ارسال پیام باید در Tinkera Robot عضو شوید.\n\n"
+                "• برای ارسال پیام باید در Nuya عضو شوید.\n\n"
                 "• لطفاً با استفاده از دکمه زیر ربات را استارت کنید!\n"
                 "در غیر این صورت پیام بعدی شما نیز پاک می‌شود."
             )
@@ -457,13 +457,13 @@ async def enforce_bot_start_message(
         text = (
             f"• کاربر {mention}\n\n"
             "• پیام ارسالی شما پاک شد.\n\n"
-            "• شما باید ابتدا Tinkera Robot را فعال کنید تا بتوانید در گروه پیام ارسال کنید."
+            "• شما باید ابتدا Nuya را فعال کنید تا بتوانید در گروه پیام ارسال کنید."
         )
     else:
         text = (
             f"• کاربر {mention}\n\n"
             "• پیام ارسالی شما پاک شد.\n\n"
-            "• برای ارسال پیام باید در Tinkera Robot عضو شوید.\n\n"
+            "• برای ارسال پیام باید در Nuya عضو شوید.\n\n"
             "• لطفاً با استفاده از دکمه زیر ربات را استارت کنید!"
         )
     reservation = await _reserve_notice(decision.state_id)
