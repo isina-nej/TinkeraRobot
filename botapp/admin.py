@@ -3,7 +3,7 @@ from django.contrib import admin
 from botapp.models import (
     BotMessageSettings,
     BotStartGateEvent,
-    BotStartUserState,
+    GroupUserGateState,
     ChatLink,
     GroupActionLog,
     GroupQuota,
@@ -22,18 +22,18 @@ from botapp.models import (
 
 @admin.register(TelegramUser)
 class TelegramUserAdmin(admin.ModelAdmin):
-    list_display = ("user_id", "started", "blocked", "welcomed_at", "last_check_at")
-    list_filter = ("started", "blocked", "welcomed_at")
-    search_fields = ("=user_id",)
+    list_display = ("telegram_user_id", "started", "blocked", "last_live_check_at")
+    list_filter = ("started", "blocked")
+    search_fields = ("=telegram_user_id",)
 
 
-@admin.register(BotStartUserState)
-class BotStartUserStateAdmin(admin.ModelAdmin):
+@admin.register(GroupUserGateState)
+class GroupUserGateStateAdmin(admin.ModelAdmin):
     list_display = (
         "group",
         "telegram_user_id",
         "warning_sent_at",
-        "last_notice_at",
+        "last_warning_update_at",
         "notice_delete_at",
         "message_deleted_count",
         "last_check_at",
@@ -45,8 +45,8 @@ class BotStartUserStateAdmin(admin.ModelAdmin):
         "telegram_user_id",
         "first_message_at",
         "warning_sent_at",
-        "last_notice_at",
-        "notice_message_id",
+        "last_warning_update_at",
+        "warning_message_id",
         "notice_delete_at",
         "message_deleted_count",
         "last_check_at",

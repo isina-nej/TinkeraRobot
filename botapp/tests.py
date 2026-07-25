@@ -43,6 +43,7 @@ from botapp.moderation import (
 from botapp.template_renderer import gregorian_to_jalali, render_member_template
 from botapp.services import (
     call_ai_api,
+    call_noya_api,
     consume_group_quota,
     contains_blocked_word,
     extract_urls,
@@ -424,6 +425,43 @@ class ChatLinkTest(TestCase):
 
 
 class AiApiTest(TestCase):
+    @patch.dict("os.environ", {}, clear=True)
+    def test_noya_api_without_key_does_not_make_request(self):
+        with patch("botapp.services.httpx.AsyncClient") as client:
+            result = async_to_sync(call_noya_api)("سلام", "telegram:1")
+
+        assert result == "خطا در ارتباط با نویا. لطفاً دوباره تلاش کنید."
+        client.assert_not_called()
+
+    @patch.dict(
+        "os.environ",
+        {
+            "NOYA_API_KEY": "test-key",
+            "NOYA_API_URL": "https://example.test/v1/chat/completions",
+            "NOYA_MODEL": "test-model",
+        },
+        clear=True,
+    )
+    def test_noya_api_reads_credentials_and_model_from_environment(self):
+        response = httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "پاسخ نویا"}}]},
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        )
+        client = AsyncMock()
+        client.post.return_value = response
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+
+        with patch("botapp.services.httpx.AsyncClient", return_value=context):
+            result = async_to_sync(call_noya_api)("سلام", "telegram:1")
+
+        assert result == "پاسخ نویا"
+        kwargs = client.post.await_args.kwargs
+        assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+        assert kwargs["json"]["model"] == "test-model"
+        assert kwargs["json"]["stream"] is False
+
     def test_successful_response_returns_content(self):
         response = httpx.Response(
             200,

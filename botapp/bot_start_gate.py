@@ -1,5 +1,9 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
+import struct
 from dataclasses import dataclass
 from datetime import timedelta
 from html import escape
@@ -9,15 +13,22 @@ from aiogram.enums import ChatMemberStatus, ChatType, ContentType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from botapp.models import BotStartGateEvent, BotStartUserState, GroupSettings, TelegramUser
+from botapp.models import BotStartGateEvent, GroupSettings, GroupUserGateState, TelegramUser
 
 logger = logging.getLogger(__name__)
+_TELEGRAM_CALL_ERRORS = (TelegramAPIError, OSError)
 _ADMIN_STATUSES = {ChatMemberStatus.CREATOR, ChatMemberStatus.ADMINISTRATOR, "creator", "administrator"}
 OFFICIAL_BOT_USERNAME = "NuyaRobot"
 NOTICE_TTL = timedelta(minutes=3)
+DEEP_LINK_TTL = timedelta(minutes=15)
+_DEEP_LINK_PREFIX = "gate_"
+_DEEP_LINK_STRUCT = struct.Struct(">qQ")
+_DEEP_LINK_EXPIRY_STRUCT = struct.Struct(">I")
+_DEEP_LINK_TAG_BYTES = 10
 WELCOME_TEXT = """به ربات تینکرا خوش اومدی. 🚀
 
 اگر مشکلی مشاهده کردی یا پیشنهادی برای بهتر شدن ربات داشتی، خوشحال می‌شیم با ما در میون بذاری. بازخوردهای شما مستقیماً در بهبود نسخه‌های بعدی تأثیر داره.
@@ -34,14 +45,58 @@ class BotStartDecision:
     blocked: bool = False
 
 
-def deep_link_payload(group_id: int) -> str:
-    return f"g_{abs(int(group_id))}"
+def _deep_link_key() -> bytes:
+    return hashlib.sha256(f"bot-start-gate:{settings.SECRET_KEY}".encode()).digest()
 
 
-def start_keyboard(bot_username: str, group_id: int, *, blocked: bool = False) -> InlineKeyboardMarkup:
+def deep_link_payload(group_id: int, user_id: int, *, expires_at: int | None = None) -> str:
+    expiry = expires_at or int((timezone.now() + DEEP_LINK_TTL).timestamp())
+    body = _DEEP_LINK_STRUCT.pack(int(group_id), int(user_id)) + _DEEP_LINK_EXPIRY_STRUCT.pack(expiry)
+    tag = hmac.digest(_deep_link_key(), body, "sha256")[:_DEEP_LINK_TAG_BYTES]
+    encoded = base64.urlsafe_b64encode(body + tag).rstrip(b"=").decode()
+    return f"{_DEEP_LINK_PREFIX}{encoded}"
+
+
+def parse_deep_link_payload(payload: str, *, current_user_id: int) -> int | None:
+    if not payload.startswith(_DEEP_LINK_PREFIX):
+        return None
+    encoded = payload[len(_DEEP_LINK_PREFIX):]
+    try:
+        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        body, supplied_tag = raw[:-_DEEP_LINK_TAG_BYTES], raw[-_DEEP_LINK_TAG_BYTES:]
+        expected_tag = hmac.digest(_deep_link_key(), body, "sha256")[:_DEEP_LINK_TAG_BYTES]
+        if not hmac.compare_digest(supplied_tag, expected_tag):
+            return None
+        identity, expiry_bytes = body[:_DEEP_LINK_STRUCT.size], body[_DEEP_LINK_STRUCT.size:]
+        group_id, token_user_id = _DEEP_LINK_STRUCT.unpack(identity)
+        expires_at = _DEEP_LINK_EXPIRY_STRUCT.unpack(expiry_bytes)[0]
+    except (ValueError, TypeError, struct.error):
+        return None
+    if token_user_id != int(current_user_id) or expires_at < int(timezone.now().timestamp()):
+        return None
+    return group_id
+
+
+def start_keyboard(
+    bot_username: str,
+    group_id: int,
+    user_id: int,
+    *,
+    blocked: bool = False,
+) -> InlineKeyboardMarkup:
     label = "🚀 باز کردن ربات" if blocked else "🚀 استارت"
-    url = f"https://t.me/{OFFICIAL_BOT_USERNAME}?start={deep_link_payload(group_id)}"
+    username = (bot_username or OFFICIAL_BOT_USERNAME).lstrip("@")
+    url = f"https://t.me/{username}?start={deep_link_payload(group_id, user_id)}"
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, url=url)]])
+
+
+def _gate_event_message_id(message: Message) -> int:
+    media_group_id = getattr(message, "media_group_id", None)
+    if not media_group_id:
+        return message.message_id
+    identity = f"{message.chat.id}:{getattr(message.from_user, 'id', 0)}:{media_group_id}".encode()
+    event_id = int.from_bytes(hashlib.sha256(identity).digest()[:8], "big") & ((1 << 63) - 1)
+    return -(event_id or 1)
 
 
 def _service_or_exempt(message: Message) -> bool:
@@ -73,10 +128,7 @@ def _service_or_exempt(message: Message) -> bool:
             getattr(message, "content_type", None) is not None
             and message.content_type not in user_content_types
         )
-        or (
-            message.sender_chat
-            and message.sender_chat.id == message.chat.id
-        )
+        or message.sender_chat is not None
         or message.new_chat_members
         or message.left_chat_member
         or message.pinned_message
@@ -86,19 +138,19 @@ def _service_or_exempt(message: Message) -> bool:
 @sync_to_async(thread_sensitive=True)
 def _load_gate_context(chat_id: int, user_id: int):
     group, _ = GroupSettings.objects.get_or_create(chat_id=chat_id)
-    user, _ = TelegramUser.objects.get_or_create(user_id=user_id)
+    user, _ = TelegramUser.objects.get_or_create(telegram_user_id=user_id)
     return group, user.started, user.blocked
 
 
 @sync_to_async(thread_sensitive=True)
 def _touch_user(user_id: int, *, started=None, blocked=None):
-    user, _ = TelegramUser.objects.get_or_create(user_id=user_id)
+    user, _ = TelegramUser.objects.get_or_create(telegram_user_id=user_id)
     if started is not None:
         user.started = started
     if blocked is not None:
         user.blocked = blocked
-    user.last_check_at = timezone.now()
-    fields = ["last_check_at"]
+    user.last_live_check_at = timezone.now()
+    fields = ["last_live_check_at"]
     if started is not None:
         fields.append("started")
     if blocked is not None:
@@ -118,8 +170,7 @@ def _prepare_decision(
 ) -> BotStartDecision:
     now = timezone.now()
     with transaction.atomic():
-        GroupSettings.objects.select_for_update().get(pk=group_id)
-        state, _ = BotStartUserState.objects.select_for_update().get_or_create(
+        state, _ = GroupUserGateState.objects.select_for_update().get_or_create(
             group_id=group_id,
             telegram_user_id=user_id,
         )
@@ -182,7 +233,7 @@ def _prepare_decision(
 def _warning_failed(event_id: int):
     with transaction.atomic():
         event = BotStartGateEvent.objects.select_for_update().get(pk=event_id)
-        state = BotStartUserState.objects.select_for_update().get(
+        state = GroupUserGateState.objects.select_for_update().get(
             group=event.group,
             telegram_user_id=event.telegram_user_id,
         )
@@ -199,10 +250,18 @@ def _warning_failed(event_id: int):
 
 
 @sync_to_async(thread_sensitive=True)
+def _event_failed(event_id: int):
+    BotStartGateEvent.objects.filter(pk=event_id).update(
+        status="failed",
+        updated_at=timezone.now(),
+    )
+
+
+@sync_to_async(thread_sensitive=True)
 def _warning_completed(event_id: int):
     with transaction.atomic():
         event = BotStartGateEvent.objects.select_for_update().get(pk=event_id)
-        state = BotStartUserState.objects.select_for_update().get(
+        state = GroupUserGateState.objects.select_for_update().get(
             group=event.group,
             telegram_user_id=event.telegram_user_id,
         )
@@ -223,7 +282,7 @@ def _warning_completed(event_id: int):
 @sync_to_async(thread_sensitive=True)
 def _mark_deleted(state_id: int, event_id: int):
     with transaction.atomic():
-        state = BotStartUserState.objects.select_for_update().get(pk=state_id)
+        state = GroupUserGateState.objects.select_for_update().get(pk=state_id)
         event = BotStartGateEvent.objects.select_for_update().get(pk=event_id)
         state.message_deleted_count += 1
         state.save(update_fields=["message_deleted_count", "updated_at"])
@@ -235,55 +294,51 @@ def _mark_deleted(state_id: int, event_id: int):
 def _reserve_notice(state_id: int):
     now = timezone.now()
     with transaction.atomic():
-        state = BotStartUserState.objects.select_for_update().get(pk=state_id)
-        if state.last_notice_at and state.last_notice_at > now - NOTICE_TTL:
+        state = GroupUserGateState.objects.select_for_update().get(pk=state_id)
+        if state.last_warning_update_at and state.last_warning_update_at > now - NOTICE_TTL:
             return None
-        previous_message_id = state.notice_message_id
-        state.last_notice_at = now
-        state.notice_message_id = None
-        state.notice_delete_at = now + NOTICE_TTL
-        state.save(update_fields=[
-            "last_notice_at",
-            "notice_message_id",
-            "notice_delete_at",
-            "updated_at",
-        ])
+        previous_message_id = state.warning_message_id
+        state.last_warning_update_at = now
+        state.save(update_fields=["last_warning_update_at", "updated_at"])
         return now, previous_message_id
 
 
 @sync_to_async(thread_sensitive=True)
 def _record_notice(state_id: int, reserved_at, message_id: int):
-    BotStartUserState.objects.filter(
+    GroupUserGateState.objects.filter(
         pk=state_id,
-        last_notice_at=reserved_at,
-    ).update(notice_message_id=message_id, updated_at=timezone.now())
+        last_warning_update_at=reserved_at,
+    ).update(
+        warning_message_id=message_id,
+        notice_delete_at=reserved_at + NOTICE_TTL,
+        updated_at=timezone.now(),
+    )
 
 
 @sync_to_async(thread_sensitive=True)
 def _release_notice(state_id: int, reserved_at):
-    BotStartUserState.objects.filter(
+    GroupUserGateState.objects.filter(
         pk=state_id,
-        last_notice_at=reserved_at,
-        notice_message_id__isnull=True,
-    ).update(last_notice_at=None, notice_delete_at=None, updated_at=timezone.now())
+        last_warning_update_at=reserved_at,
+    ).update(last_warning_update_at=None, updated_at=timezone.now())
 
 
 @sync_to_async(thread_sensitive=True)
 def _due_notices(limit: int = 100):
     return list(
-        BotStartUserState.objects.filter(
-            notice_message_id__isnull=False,
+        GroupUserGateState.objects.filter(
+            warning_message_id__isnull=False,
             notice_delete_at__lte=timezone.now(),
-        ).values_list("id", "group__chat_id", "notice_message_id")[:limit]
+        ).values_list("id", "group__chat_id", "warning_message_id")[:limit]
     )
 
 
 @sync_to_async(thread_sensitive=True)
-def _clear_notice(state_id: int, message_id: int):
-    BotStartUserState.objects.filter(
+def clear_notice_record(state_id: int, message_id: int):
+    GroupUserGateState.objects.filter(
         pk=state_id,
-        notice_message_id=message_id,
-    ).update(notice_message_id=None, notice_delete_at=None, updated_at=timezone.now())
+        warning_message_id=message_id,
+    ).update(warning_message_id=None, notice_delete_at=None, updated_at=timezone.now())
 
 
 async def cleanup_due_notices(bot, *, limit: int = 100) -> int:
@@ -293,10 +348,10 @@ async def cleanup_due_notices(bot, *, limit: int = 100) -> int:
             await bot.delete_message(chat_id, message_id)
         except TelegramBadRequest:
             pass
-        except TelegramAPIError:
+        except _TELEGRAM_CALL_ERRORS:
             logger.exception("Bot-start notice cleanup failed for message %s", message_id)
             continue
-        await _clear_notice(state_id, message_id)
+        await clear_notice_record(state_id, message_id)
         cleaned += 1
     return cleaned
 
@@ -312,29 +367,13 @@ async def _bot_can_enforce(message: Message, bot) -> bool:
     return member.status == ChatMemberStatus.CREATOR or (
         member.status == ChatMemberStatus.ADMINISTRATOR
         and bool(getattr(member, "can_delete_messages", False))
+        and getattr(member, "can_send_messages", True) is not False
     )
 
 
 async def _user_is_admin(message: Message, bot) -> bool:
     member = await bot.get_chat_member(message.chat.id, message.from_user.id)
     return member.status in _ADMIN_STATUSES
-
-
-@sync_to_async(thread_sensitive=True)
-def _warning_is_pending(group_id: int, user_id: int) -> bool:
-    return BotStartUserState.objects.filter(
-        group_id=group_id,
-        telegram_user_id=user_id,
-        warning_pending_at__isnull=False,
-    ).exists()
-
-
-async def _wait_for_warning(group_id: int, user_id: int) -> bool:
-    for _ in range(300):
-        if not await _warning_is_pending(group_id, user_id):
-            return True
-        await asyncio.sleep(0.1)
-    return False
 
 
 async def enforce_bot_start_message(
@@ -357,9 +396,9 @@ async def enforce_bot_start_message(
             return False
         if await _user_is_admin(message, bot):
             return False
-    except TelegramAPIError:
-        logger.exception("Bot-start permission check failed in %s", message.chat.id)
-        return True
+    except _TELEGRAM_CALL_ERRORS:
+        logger.warning("Bot-start permission check temporarily failed in %s", message.chat.id)
+        return False
 
     if started:
         try:
@@ -368,9 +407,9 @@ async def enforce_bot_start_message(
             started = False
             blocked = True
             await _touch_user(message.from_user.id, started=False, blocked=True)
-        except TelegramAPIError:
-            logger.exception("Bot-start private status check failed for %s", message.from_user.id)
-            return True
+        except _TELEGRAM_CALL_ERRORS:
+            logger.warning("Bot-start private status check temporarily failed for %s", message.from_user.id)
+            return False
         else:
             await _touch_user(message.from_user.id, blocked=False)
             return False
@@ -378,27 +417,33 @@ async def enforce_bot_start_message(
     decision = await _prepare_decision(
         group.id,
         message.from_user.id,
-        message_id=message.message_id,
+        message_id=_gate_event_message_id(message),
         telegram_update_id=telegram_update_id,
         blocked=blocked,
     )
     if decision.action == "duplicate":
+        if getattr(message, "media_group_id", None):
+            try:
+                await bot.delete_message(message.chat.id, message.message_id)
+            except _TELEGRAM_CALL_ERRORS:
+                pass
         return True
     if decision.action == "hold":
-        if not await _wait_for_warning(group.id, message.from_user.id):
-            return True
-        decision = await _prepare_decision(
-            group.id,
-            message.from_user.id,
-            message_id=message.message_id,
-            telegram_update_id=telegram_update_id,
-            blocked=blocked,
-        )
-        if decision.action in {"duplicate", "hold"}:
-            return True
+        try:
+            await bot.delete_message(message.chat.id, message.message_id)
+        except _TELEGRAM_CALL_ERRORS:
+            await _event_failed(decision.event_id)
+        else:
+            await _mark_deleted(decision.state_id, decision.event_id)
+        return True
     name = escape(message.from_user.first_name or "کاربر")
     mention = f'<a href="tg://user?id={message.from_user.id}">{name}</a>'
-    keyboard = start_keyboard(bot_username, message.chat.id, blocked=decision.blocked)
+    keyboard = start_keyboard(
+        bot_username,
+        message.chat.id,
+        message.from_user.id,
+        blocked=decision.blocked,
+    )
     if decision.action == "warn":
         if decision.blocked:
             text = (
@@ -418,16 +463,13 @@ async def enforce_bot_start_message(
             await _warning_completed(decision.event_id)
             return True
         reserved_at, previous_message_id = reservation
-        if previous_message_id:
-            try:
-                await bot.delete_message(message.chat.id, previous_message_id)
-            except TelegramAPIError:
-                pass
-        # delete user message before sending warning notice
+        deleted = False
         try:
             await bot.delete_message(message.chat.id, message.message_id)
-        except TelegramAPIError:
+        except _TELEGRAM_CALL_ERRORS:
             pass
+        else:
+            deleted = True
         try:
             notice = await bot.send_message(
                 chat_id=message.chat.id,
@@ -435,21 +477,28 @@ async def enforce_bot_start_message(
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
-        except TelegramAPIError:
+        except _TELEGRAM_CALL_ERRORS:
             await _release_notice(decision.state_id, reserved_at)
             await _warning_failed(decision.event_id)
             logger.exception("Bot-start first warning failed for message %s", message.message_id)
         else:
-            notice_message_id = getattr(notice, "message_id", None)
-            if isinstance(notice_message_id, int):
-                await _record_notice(decision.state_id, reserved_at, notice_message_id)
+            warning_message_id = getattr(notice, "message_id", None)
+            if isinstance(warning_message_id, int):
+                await _record_notice(decision.state_id, reserved_at, warning_message_id)
+            if previous_message_id:
+                try:
+                    await bot.delete_message(message.chat.id, previous_message_id)
+                except _TELEGRAM_CALL_ERRORS:
+                    pass
             await _warning_completed(decision.event_id)
+            if deleted:
+                await _mark_deleted(decision.state_id, decision.event_id)
         return True
 
     try:
         await bot.delete_message(message.chat.id, message.message_id)
-    except TelegramAPIError:
-        await _warning_failed(decision.event_id)
+    except _TELEGRAM_CALL_ERRORS:
+        await _event_failed(decision.event_id)
         logger.exception("Bot-start delete failed for message %s", message.message_id)
         return True
     await _mark_deleted(decision.state_id, decision.event_id)
@@ -470,11 +519,6 @@ async def enforce_bot_start_message(
     if reservation is None:
         return True
     reserved_at, previous_message_id = reservation
-    if previous_message_id:
-        try:
-            await bot.delete_message(message.chat.id, previous_message_id)
-        except TelegramAPIError:
-            pass
     try:
         notice = await bot.send_message(
             chat_id=message.chat.id,
@@ -482,67 +526,96 @@ async def enforce_bot_start_message(
             parse_mode="HTML",
             reply_markup=keyboard,
         )
-    except TelegramAPIError:
+    except _TELEGRAM_CALL_ERRORS:
         await _release_notice(decision.state_id, reserved_at)
         logger.exception("Bot-start deletion notice failed for message %s", message.message_id)
     else:
-        notice_message_id = getattr(notice, "message_id", None)
-        if isinstance(notice_message_id, int):
-            await _record_notice(decision.state_id, reserved_at, notice_message_id)
+        warning_message_id = getattr(notice, "message_id", None)
+        if isinstance(warning_message_id, int):
+            await _record_notice(decision.state_id, reserved_at, warning_message_id)
+        if previous_message_id:
+            try:
+                await bot.delete_message(message.chat.id, previous_message_id)
+            except _TELEGRAM_CALL_ERRORS:
+                pass
     return True
 
 
 @sync_to_async(thread_sensitive=True)
 def mark_user_started(user_id: int):
     with transaction.atomic():
-        user, _ = TelegramUser.objects.select_for_update().get_or_create(user_id=user_id)
+        user, _ = TelegramUser.objects.select_for_update().get_or_create(telegram_user_id=user_id)
         now = timezone.now()
-        first_start = user.welcomed_at is None
         user.started = True
         user.blocked = False
-        user.warned = False
-        user.last_check_at = now
-        if first_start:
-            user.welcomed_at = now
+        user.last_live_check_at = now
         user.save(update_fields=[
             "started",
             "blocked",
-            "warned",
-            "welcomed_at",
-            "last_check_at",
+            "last_live_check_at",
         ])
         notice_targets = list(
-            BotStartUserState.objects.filter(
+            GroupUserGateState.objects.filter(
                 telegram_user_id=user_id,
-                notice_message_id__isnull=False,
-            ).values_list("group__chat_id", "notice_message_id")
+                warning_message_id__isnull=False,
+            ).values_list("id", "group__chat_id", "warning_message_id")
         )
-        BotStartUserState.objects.filter(telegram_user_id=user_id).update(
+        GroupUserGateState.objects.filter(telegram_user_id=user_id).update(
             warning_pending_at=None,
             warning_sent_at=None,
-            last_notice_at=None,
-            notice_message_id=None,
-            notice_delete_at=None,
+            last_warning_update_at=None,
             updated_at=now,
         )
         BotStartGateEvent.objects.filter(
             telegram_user_id=user_id,
             status="pending",
         ).update(status="completed", updated_at=now)
-        return user, notice_targets, first_start
+        return user, notice_targets
+
+
+class BotStartGateService:
+    def __init__(self, bot_username: str):
+        self.bot_username = bot_username
+
+    async def check_user_access(self, message: Message, bot, *, telegram_update_id=None) -> bool:
+        return await enforce_bot_start_message(
+            message,
+            bot,
+            bot_username=self.bot_username,
+            telegram_update_id=telegram_update_id,
+        )
+
+    async def mark_started(self, user_id: int):
+        return await mark_user_started(user_id)
+
+    async def mark_blocked(self, user_id: int):
+        return await _touch_user(user_id, started=False, blocked=True)
+
+    async def clear_warning(self, bot, state_id: int, chat_id: int, message_id: int) -> None:
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except _TELEGRAM_CALL_ERRORS:
+            return
+        await clear_notice_record(state_id, message_id)
+
+    async def validate_group_permission(self, message: Message, bot) -> bool:
+        return await _bot_can_enforce(message, bot)
 
 
 class BotStartGateMiddleware(BaseMiddleware):
     def __init__(self, bot_username: str):
-        self.bot_username = bot_username
+        self.service = BotStartGateService(bot_username)
 
     async def __call__(self, handler, event, data):
         if isinstance(event, Message):
+            if event.chat.type == ChatType.PRIVATE and event.from_user:
+                _, notice_targets = await self.service.mark_started(event.from_user.id)
+                for state_id, chat_id, message_id in notice_targets:
+                    await self.service.clear_warning(data["bot"], state_id, chat_id, message_id)
             update = data.get("event_update")
-            blocked = await enforce_bot_start_message(
+            blocked = await self.service.check_user_access(
                 event,
                 data["bot"],
-                bot_username=self.bot_username,
                 telegram_update_id=getattr(update, "update_id", None),
             )
             if blocked:

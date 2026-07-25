@@ -52,7 +52,7 @@ class BotStartGateRuntimeTest(TestCase):
 
     def test_first_message_warns_and_second_is_deleted_with_group_deep_link(self):
         from botapp.bot_start_gate import enforce_bot_start_message
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
         bot = self.bot()
 
@@ -63,24 +63,23 @@ class BotStartGateRuntimeTest(TestCase):
             self.message(2), bot, bot_username="NuyaRobot"
         )
 
-        state = BotStartUserState.objects.get(group=self.group, telegram_user_id=42)
+        state = GroupUserGateState.objects.get(group=self.group, telegram_user_id=42)
         assert first is True
         assert second is True
-        assert bot.delete_message.await_count == 1
+        assert bot.delete_message.await_count == 2
         assert bot.send_message.await_count == 1
         first_send = bot.send_message.await_args
-        assert first_send.kwargs["reply_to_message_id"] == 1
         assert "&lt;Ali&gt;" in first_send.kwargs["text"]
-        assert first_send.kwargs["reply_markup"].inline_keyboard[0][0].url == (
-            "https://t.me/NuyaRobot?start=g_100123"
+        assert first_send.kwargs["reply_markup"].inline_keyboard[0][0].url.startswith(
+            "https://t.me/NuyaRobot?start=gate_"
         )
         assert state.warning_sent_at is not None
-        assert state.message_deleted_count == 1
+        assert state.message_deleted_count == 2
 
     def test_started_user_is_allowed(self):
         from botapp.bot_start_gate import enforce_bot_start_message
 
-        TelegramUser.objects.create(user_id=42, started=True)
+        TelegramUser.objects.create(telegram_user_id=42, started=True)
         bot = AsyncMock()
         bot.id = 999
         bot.get_chat_member.side_effect = [
@@ -109,11 +108,11 @@ class BotStartGateRuntimeTest(TestCase):
             self.message(21), bot, bot_username="wrong_name"
         )
 
-        assert bot.delete_message.await_count == 1
+        assert bot.delete_message.await_count == 2
         assert bot.send_message.await_count == 1
-        state = self.group.bot_start_user_states.get(telegram_user_id=42)
-        assert state.notice_message_id == 700
-        assert state.notice_delete_at == state.last_notice_at + timedelta(minutes=3)
+        state = self.group.user_gate_states.get(telegram_user_id=42)
+        assert state.warning_message_id == 700
+        assert state.notice_delete_at == state.last_warning_update_at + timedelta(minutes=3)
 
     def test_notice_is_resent_after_three_minutes(self):
         from botapp.bot_start_gate import enforce_bot_start_message
@@ -123,27 +122,27 @@ class BotStartGateRuntimeTest(TestCase):
         second_notice = SimpleNamespace(message_id=701)
         bot.send_message.side_effect = [first_notice, second_notice]
         async_to_sync(enforce_bot_start_message)(self.message(22), bot, bot_username="wrong_name")
-        state = self.group.bot_start_user_states.get(telegram_user_id=42)
-        state.last_notice_at = timezone.now() - timedelta(minutes=3, seconds=1)
+        state = self.group.user_gate_states.get(telegram_user_id=42)
+        state.last_warning_update_at = timezone.now() - timedelta(minutes=3, seconds=1)
         state.notice_delete_at = timezone.now() - timedelta(seconds=1)
-        state.save(update_fields=["last_notice_at", "notice_delete_at"])
+        state.save(update_fields=["last_warning_update_at", "notice_delete_at"])
 
         async_to_sync(enforce_bot_start_message)(self.message(23), bot, bot_username="wrong_name")
 
         assert bot.send_message.await_count == 2
         assert bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].url.startswith(
-            "https://t.me/NuyaRobot?start="
+            "https://t.me/wrong_name?start=gate_"
         )
 
     def test_due_notice_cleanup_survives_restart(self):
         from botapp.bot_start_gate import cleanup_due_notices
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
-        state = BotStartUserState.objects.create(
+        state = GroupUserGateState.objects.create(
             group=self.group,
             telegram_user_id=42,
-            last_notice_at=timezone.now() - timedelta(minutes=4),
-            notice_message_id=800,
+            last_warning_update_at=timezone.now() - timedelta(minutes=4),
+            warning_message_id=800,
             notice_delete_at=timezone.now() - timedelta(minutes=1),
         )
         bot = AsyncMock()
@@ -151,12 +150,12 @@ class BotStartGateRuntimeTest(TestCase):
         assert async_to_sync(cleanup_due_notices)(bot) == 1
         bot.delete_message.assert_awaited_once_with(-100123, 800)
         state.refresh_from_db()
-        assert state.notice_message_id is None
+        assert state.warning_message_id is None
         assert state.notice_delete_at is None
 
     def test_states_are_independent_per_group(self):
         from botapp.bot_start_gate import enforce_bot_start_message
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
         second_group = GroupSettings.objects.create(
             chat_id=-100456,
@@ -179,16 +178,16 @@ class BotStartGateRuntimeTest(TestCase):
             self.message(5, second_group.chat_id), bot, bot_username="NuyaRobot"
         )
 
-        assert BotStartUserState.objects.filter(telegram_user_id=42).count() == 2
-        assert bot.delete_message.await_count == 0
+        assert GroupUserGateState.objects.filter(telegram_user_id=42).count() == 2
+        assert bot.delete_message.await_count == 2
         assert bot.send_message.await_count == 2
 
     def test_blocked_user_gets_block_warning_then_delete_notice(self):
         from aiogram.exceptions import TelegramForbiddenError
         from botapp.bot_start_gate import enforce_bot_start_message
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
-        TelegramUser.objects.create(user_id=42, started=True)
+        TelegramUser.objects.create(telegram_user_id=42, started=True)
         bot = AsyncMock()
         bot.id = 999
         bot.get_chat_member.side_effect = [
@@ -208,20 +207,20 @@ class BotStartGateRuntimeTest(TestCase):
             self.message(7), bot, bot_username="NuyaRobot"
         )
 
-        user = TelegramUser.objects.get(user_id=42)
-        state = BotStartUserState.objects.get(group=self.group, telegram_user_id=42)
+        user = TelegramUser.objects.get(telegram_user_id=42)
+        state = GroupUserGateState.objects.get(group=self.group, telegram_user_id=42)
         assert first is True and second is True
         assert user.started is False and user.blocked is True
         assert "مسدود کرده‌اید" in bot.send_message.await_args.kwargs["text"]
         assert bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🚀 باز کردن ربات"
-        assert state.message_deleted_count == 1
+        assert state.message_deleted_count == 2
 
     def test_start_marks_user_allowed_clears_group_warnings_and_sends_exact_welcome(self):
         from botapp.bot_start_gate import WELCOME_TEXT, mark_user_started
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
-        TelegramUser.objects.create(user_id=42, started=False, blocked=True, warned=True)
-        state = BotStartUserState.objects.create(
+        TelegramUser.objects.create(telegram_user_id=42, started=False, blocked=True)
+        state = GroupUserGateState.objects.create(
             group=self.group,
             telegram_user_id=42,
             warning_pending_at="2026-01-01T00:00:00Z",
@@ -239,10 +238,10 @@ class BotStartGateRuntimeTest(TestCase):
 
         async_to_sync(mark_user_started)(42)
 
-        user = TelegramUser.objects.get(user_id=42)
+        user = TelegramUser.objects.get(telegram_user_id=42)
         state.refresh_from_db()
         event.refresh_from_db()
-        assert user.started is True and user.blocked is False and user.warned is False
+        assert user.started is True and user.blocked is False
         assert state.warning_pending_at is None and state.warning_sent_at is None
         assert event.status == "completed"
         assert WELCOME_TEXT.startswith("به ربات تینکرا خوش اومدی. 🚀")
@@ -251,14 +250,14 @@ class BotStartGateRuntimeTest(TestCase):
     def test_failed_warning_rolls_back_and_failed_delete_is_not_counted(self):
         from aiogram.exceptions import TelegramNetworkError
         from botapp.bot_start_gate import enforce_bot_start_message
-        from botapp.models import BotStartUserState
+        from botapp.models import GroupUserGateState
 
         bot = self.bot()
         bot.send_message.side_effect = TelegramNetworkError(method=AsyncMock(), message="offline")
         assert async_to_sync(enforce_bot_start_message)(
             self.message(8), bot, bot_username="NuyaRobot"
         ) is True
-        state = BotStartUserState.objects.get(group=self.group, telegram_user_id=42)
+        state = GroupUserGateState.objects.get(group=self.group, telegram_user_id=42)
         assert state.warning_sent_at is None
 
         state.warning_sent_at = "2026-01-01T00:00:00Z"
@@ -286,7 +285,7 @@ class BotStartGateRuntimeTest(TestCase):
 
         assert first is True and duplicate is True
         bot.send_message.assert_awaited_once()
-        bot.delete_message.assert_not_awaited()
+        bot.delete_message.assert_awaited_once_with(-100123, 10)
 
     def test_pending_warning_never_turns_concurrent_message_into_delete(self):
         from botapp.bot_start_gate import _prepare_decision, _warning_failed
@@ -306,31 +305,19 @@ class BotStartGateRuntimeTest(TestCase):
         assert concurrent.action == "hold"
         assert retry.action == "warn"
 
-    def test_concurrent_second_message_waits_for_warning_then_is_deleted(self):
-        import asyncio
+    def test_concurrent_second_message_is_deleted_without_waiting(self):
+        from botapp.bot_start_gate import _prepare_decision, enforce_bot_start_message
 
-        from botapp.bot_start_gate import (
-            _prepare_decision,
-            _warning_completed,
-            enforce_bot_start_message,
-        )
-
-        first = async_to_sync(_prepare_decision)(
+        async_to_sync(_prepare_decision)(
             self.group.id, 42, message_id=14, telegram_update_id=701, blocked=False
         )
         bot = self.bot()
 
-        async def scenario():
-            second = asyncio.create_task(enforce_bot_start_message(
-                self.message(15), bot, bot_username="NuyaRobot", telegram_update_id=702
-            ))
-            await asyncio.sleep(0.05)
-            assert second.done() is False
-            await _warning_completed(first.event_id)
-            return await second
-
-        assert async_to_sync(scenario)() is True
+        assert async_to_sync(enforce_bot_start_message)(
+            self.message(15), bot, bot_username="NuyaRobot", telegram_update_id=702
+        ) is True
         bot.delete_message.assert_awaited_once_with(-100123, 15)
+        bot.send_message.assert_not_awaited()
 
     def test_all_non_user_content_types_are_service_exempt(self):
         from botapp.bot_start_gate import _service_or_exempt
@@ -351,8 +338,8 @@ class BotStartGateRuntimeTest(TestCase):
         from botapp.bot_start_gate import OFFICIAL_BOT_USERNAME, WELCOME_TEXT, start_keyboard
 
         assert OFFICIAL_BOT_USERNAME == "NuyaRobot"
-        assert start_keyboard("wrong_name", -100123).inline_keyboard[0][0].url == (
-            "https://t.me/NuyaRobot?start=g_100123"
+        assert start_keyboard("wrong_name", -100123, 42).inline_keyboard[0][0].url.startswith(
+            "https://t.me/wrong_name?start=gate_"
         )
         assert WELCOME_TEXT == (
             "به ربات تینکرا خوش اومدی. 🚀\n\n"
@@ -362,7 +349,7 @@ class BotStartGateRuntimeTest(TestCase):
             "از اینکه در این مرحله کنار ما هستی و به بهتر شدن ربات کمک می‌کنی، ممنونیم. ❤️"
         )
 
-    def test_start_handler_sends_welcome_only_on_first_ever_start(self):
+    def test_start_handler_sends_welcome_on_every_start(self):
         from botapp.bot_start_gate import WELCOME_TEXT
         from botapp.management.commands.runbot import start
 
@@ -375,10 +362,10 @@ class BotStartGateRuntimeTest(TestCase):
         async_to_sync(start)(message, bot)
         async_to_sync(start)(message, bot)
 
-        user = TelegramUser.objects.get(user_id=42)
+        user = TelegramUser.objects.get(telegram_user_id=42)
         assert user.started is True and user.blocked is False
-        assert user.welcomed_at is not None
-        message.answer.assert_awaited_once_with(WELCOME_TEXT)
+        assert message.answer.await_count == 2
+        message.answer.assert_awaited_with(WELCOME_TEXT)
 
     def test_dispatcher_factory_installs_both_outer_middlewares(self):
         from botapp.bot_start_gate import BotStartGateMiddleware
@@ -475,10 +462,10 @@ class BotStartGateRuntimeTest(TestCase):
             forced_router._parent_router = None
             main_router._parent_router = None
 
-        telegram_user = TelegramUser.objects.get(user_id=42)
+        telegram_user = TelegramUser.objects.get(telegram_user_id=42)
         assert telegram_user.started is True
-        assert bot.send_message.await_args_list[0].kwargs["reply_markup"].inline_keyboard[0][0].url.endswith(
-            "?start=g_100123"
+        assert "?start=gate_" in (
+            bot.send_message.await_args_list[0].kwargs["reply_markup"].inline_keyboard[0][0].url
         )
         assert bot.await_args.args[0].text == WELCOME_TEXT
 

@@ -11,7 +11,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
@@ -53,8 +53,10 @@ from botapp.bot_start_gate import (
     BotStartGateMiddleware,
     OFFICIAL_BOT_USERNAME,
     WELCOME_TEXT,
+    clear_notice_record,
     mark_user_started,
     notice_cleanup_loop,
+    parse_deep_link_payload,
 )
 from botapp.moderation import warning_ceiling_spec
 from botapp.telegram_moderation import queue_or_execute
@@ -515,14 +517,18 @@ async def process_moderation(message: Message, bot: Bot, group: GroupSettings) -
 
 
 @router.message(Command("start"))
-async def start(message: Message, bot: Bot):
+async def start(message: Message, bot: Bot, command: CommandObject | None = None):
     if message.chat.type == ChatType.PRIVATE:
-        _, notice_targets, first_start = await mark_user_started(message.from_user.id)
-        for chat_id, message_id in notice_targets:
+        if command and command.args:
+            parse_deep_link_payload(command.args, current_user_id=message.from_user.id)
+        _, notice_targets = await mark_user_started(message.from_user.id)
+        for state_id, chat_id, message_id in notice_targets:
             try:
                 await bot.delete_message(chat_id, message_id)
-            except (TelegramBadRequest, TelegramForbiddenError):
+            except TelegramAPIError:
                 pass
+            else:
+                await clear_notice_record(state_id, message_id)
         await message.answer(WELCOME_TEXT)
 
 
@@ -1535,6 +1541,7 @@ def build_dispatcher(bot_username: str) -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.message.outer_middleware(ForcedMembershipMiddleware())
     dispatcher.message.outer_middleware(BotStartGateMiddleware(bot_username))
+    dispatcher.edited_message.outer_middleware(BotStartGateMiddleware(bot_username))
 
     # Routers are module-level singletons.
     # Tests call build_dispatcher() repeatedly in the same process.

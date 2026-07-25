@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from collections import defaultdict, deque
 from datetime import timedelta
@@ -188,15 +189,20 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
 
 
 async def call_noya_api(question: str, session_id: str) -> str:
-    url = "http://127.0.0.1:20128/v1/chat/completions"
+    api_key = os.getenv("NOYA_API_KEY", "").strip()
+    if not api_key:
+        logger.error("NOYA_API_KEY is not configured")
+        return "خطا در ارتباط با نویا. لطفاً دوباره تلاش کنید."
+
+    url = os.getenv("NOYA_API_URL", "http://127.0.0.1:20128/v1/chat/completions").strip()
     headers = {
-        "Authorization": "Bearer sk-6cf9c2d24721ff2f-2gpm4n-556acb70",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
     payload = {
-        "model": "TinkeraBot",
+        "model": os.getenv("NOYA_MODEL", "TinkeraBot").strip(),
         "stream": False,
-        "messages": [{"role": "user", "content": question}]
+        "messages": [{"role": "user", "content": question}],
     }
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -204,11 +210,9 @@ async def call_noya_api(question: str, session_id: str) -> str:
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"]
-    except httpx.TimeoutException:
-        return "زمان پاسخ تمام شد. لطفا دوباره تلاش کنید."
-    except Exception as e:
-        logger.exception("Tina AI API request failed")
-        return "خطا در ارتباط با تینا. لطفا دوباره تلاش کنید."
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        logger.exception("Noya AI API request failed")
+        return "خطا در ارتباط با نویا. لطفاً دوباره تلاش کنید."
 
 
 async def call_ai_api(api_url: str, question: str, session_id: str) -> str:

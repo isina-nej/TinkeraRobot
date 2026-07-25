@@ -6,15 +6,13 @@ from django.utils import timezone
 
 
 class TelegramUser(models.Model):
-    user_id = models.BigIntegerField(unique=True)
+    telegram_user_id = models.BigIntegerField(unique=True)
     started = models.BooleanField(default=False)
-    warned = models.BooleanField(default=False)
     blocked = models.BooleanField(default=False)
-    welcomed_at = models.DateTimeField(null=True, blank=True)
-    last_check_at = models.DateTimeField(null=True, blank=True)
+    last_live_check_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return str(self.user_id)
+        return str(self.telegram_user_id)
 
 
 class BotMessageSettings(models.Model):
@@ -297,18 +295,18 @@ class ModerationLog(models.Model):
         indexes = [models.Index(fields=["group", "-created_at"])]
 
 
-class BotStartUserState(models.Model):
+class GroupUserGateState(models.Model):
     group = models.ForeignKey(
         GroupSettings,
         on_delete=models.CASCADE,
-        related_name="bot_start_user_states",
+        related_name="user_gate_states",
     )
     telegram_user_id = models.BigIntegerField()
     first_message_at = models.DateTimeField(null=True, blank=True)
     warning_pending_at = models.DateTimeField(null=True, blank=True)
     warning_sent_at = models.DateTimeField(null=True, blank=True)
-    last_notice_at = models.DateTimeField(null=True, blank=True)
-    notice_message_id = models.BigIntegerField(null=True, blank=True)
+    last_warning_update_at = models.DateTimeField(null=True, blank=True)
+    warning_message_id = models.BigIntegerField(null=True, blank=True)
     notice_delete_at = models.DateTimeField(null=True, blank=True)
     message_deleted_count = models.PositiveBigIntegerField(default=0)
     last_check_at = models.DateTimeField(null=True, blank=True)
@@ -319,7 +317,7 @@ class BotStartUserState(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["group", "telegram_user_id"],
-                name="uniq_bot_start_state_group_user",
+                name="unique_group_user_gate_state",
             )
         ]
         indexes = [models.Index(fields=["group", "telegram_user_id"])]
