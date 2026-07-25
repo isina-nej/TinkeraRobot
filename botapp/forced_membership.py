@@ -88,10 +88,19 @@ def _event_exists(rule_id: int, update_id: int | None) -> bool:
     ).exists()
 
 
+def _message_event_exists(rule_id: int, update_id: int | None, message_id: int) -> bool:
+    if message_id < 0:
+        return ForcedMembershipEvent.objects.filter(
+            rule_id=rule_id,
+            source_message_id=message_id,
+        ).exists()
+    return _event_exists(rule_id, update_id)
+
+
 @sync_to_async(thread_sensitive=True)
 def evaluate_nonmember_message(rule_id: int, user, message_id: int, update_id: int | None) -> GateDecision:
     with transaction.atomic():
-        if _event_exists(rule_id, update_id):
+        if _message_event_exists(rule_id, update_id, message_id):
             state = ForcedMembershipUserState.objects.get(rule_id=rule_id, telegram_user_id=user.id)
             return GateDecision("ignore", state.id)
 

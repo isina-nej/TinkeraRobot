@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from html import escape
 
@@ -88,6 +89,15 @@ def _is_exempt_message(message: Message) -> bool:
     )
 
 
+def _membership_event_message_id(message: Message) -> int:
+    media_group_id = getattr(message, "media_group_id", None)
+    if not media_group_id:
+        return message.message_id
+    identity = f"{message.chat.id}:{getattr(message.from_user, 'id', 0)}:{media_group_id}".encode()
+    event_id = int.from_bytes(hashlib.sha256(identity).digest()[:8], "big") & ((1 << 63) - 1)
+    return -(event_id or 1)
+
+
 async def enforce_forced_membership_message(
     message: Message,
     bot,
@@ -144,10 +154,17 @@ async def enforce_forced_membership_message(
         decision = await evaluate_nonmember_message(
             rule.id,
             message.from_user,
-            message.message_id,
+            _membership_event_message_id(message),
             update_id,
         )
         if decision.action == "ignore":
+            if getattr(message, "media_group_id", None):
+                try:
+                    await bot.delete_message(message.chat.id, message.message_id)
+                except TelegramAPIError:
+                    logger.exception("Forced membership album delete failed for message %s", message.message_id)
+                else:
+                    await mark_message_deleted(decision.state_id, rule.id, message.message_id, update_id)
             return True
 
         mention = (
@@ -155,24 +172,37 @@ async def enforce_forced_membership_message(
             f'{escape(message.from_user.first_name or "کاربر")}</a>'
         )
         if decision.action == "warn":
+            deleted = False
+            if getattr(message, "media_group_id", None):
+                try:
+                    await bot.delete_message(message.chat.id, message.message_id)
+                except TelegramAPIError:
+                    logger.exception("Forced membership album delete failed for message %s", message.message_id)
+                else:
+                    deleted = True
+            send_kwargs = {
+                "chat_id": message.chat.id,
+                "text": (
+                    "⚠️ برای ارسال پیام در این گروه، ابتدا باید در مقصد زیر عضو شوید.\n"
+                    "در صورت عضو نشدن، پیام‌های بعدی شما حذف خواهند شد."
+                ),
+                "reply_markup": keyboard,
+            }
+            if not getattr(message, "media_group_id", None):
+                send_kwargs["reply_to_message_id"] = message.message_id
             try:
-                await bot.send_message(
-                    chat_id=message.chat.id,
-                    text=(
-                        "⚠️ برای ارسال پیام در این گروه، ابتدا باید در مقصد زیر عضو شوید.\n"
-                        "در صورت عضو نشدن، پیام‌های بعدی شما حذف خواهند شد."
-                    ),
-                    reply_to_message_id=message.message_id,
-                    reply_markup=keyboard,
-                )
+                await bot.send_message(**send_kwargs)
             except TelegramAPIError:
                 await rollback_initial_warning(
                     decision.state_id,
                     rule.id,
-                    message.message_id,
+                    _membership_event_message_id(message),
                     update_id,
                 )
                 logger.exception("Forced membership warning failed for message %s", message.message_id)
+            else:
+                if deleted:
+                    await mark_message_deleted(decision.state_id, rule.id, message.message_id, update_id)
             return True
 
         try:
@@ -181,15 +211,18 @@ async def enforce_forced_membership_message(
             logger.exception("Forced membership delete failed for message %s", message.message_id)
             return True
         await mark_message_deleted(decision.state_id, rule.id, message.message_id, update_id)
-        await bot.send_message(
-            chat_id=message.chat.id,
-            text=(
-                f"⚠️ {mention} عزیز، برای ارسال پیام باید ابتدا عضو مقصد شوید.\n"
-                "تا زمان عضویت، پیام‌های شما حذف می‌شوند."
-            ),
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
+        try:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=(
+                    f"⚠️ {mention} عزیز، برای ارسال پیام باید ابتدا عضو مقصد شوید.\n"
+                    "تا زمان عضویت، پیام‌های شما حذف می‌شوند."
+                ),
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        except TelegramAPIError:
+            logger.exception("Forced membership deletion notice failed for message %s", message.message_id)
         return True
     return False
 

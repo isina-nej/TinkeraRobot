@@ -162,6 +162,7 @@ class BotStartGateHardeningTest(TestCase):
                 isinstance(middleware, BotStartGateMiddleware)
                 for middleware in dispatcher.edited_message.outer_middleware._middlewares
             )
+            assert "edited_message" in dispatcher.resolve_used_update_types()
         finally:
             forced_router._parent_router = None
             main_router._parent_router = None

@@ -1503,6 +1503,7 @@ async def handle_member_update(event: ChatMemberUpdated, bot: Bot, event_update)
         await bot.send_message(event.chat.id, text, parse_mode="HTML")
 
 
+@router.edited_message()
 @router.message()
 async def check_message(message: Message, bot: Bot):
     if not is_group_chat(message) or not message.from_user:

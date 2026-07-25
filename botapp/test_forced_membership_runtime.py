@@ -44,7 +44,7 @@ class ForcedMembershipRuntimeTest(TestCase):
             is_bot=False,
         )
 
-    def message(self, message_id):
+    def message(self, message_id, *, media_group_id=None):
         return SimpleNamespace(
             message_id=message_id,
             chat=SimpleNamespace(id=-1001, type="supergroup"),
@@ -53,6 +53,7 @@ class ForcedMembershipRuntimeTest(TestCase):
             new_chat_members=None,
             left_chat_member=None,
             pinned_message=None,
+            media_group_id=media_group_id,
         )
 
     def test_first_nonmember_message_warns_and_second_is_deleted(self):
@@ -82,6 +83,29 @@ class ForcedMembershipRuntimeTest(TestCase):
         assert "reply_to_message_id" not in bot.send_message.await_args_list[1].kwargs
         assert "&lt;Ali&gt;" in bot.send_message.await_args_list[1].kwargs["text"]
         assert state.deleted_message_count == 1
+
+    def test_media_group_deletes_every_item_and_sends_one_warning(self):
+        from botapp.forced_membership_runtime import enforce_forced_membership_message
+
+        bot = AsyncMock()
+        bot.get_chat_member.side_effect = [
+            SimpleNamespace(status="member"), SimpleNamespace(status="left"),
+            SimpleNamespace(status="member"), SimpleNamespace(status="left"),
+            SimpleNamespace(status="member"), SimpleNamespace(status="left"),
+        ]
+
+        for message_id, update_id in ((120, 40), (121, 41), (122, 42)):
+            assert async_to_sync(enforce_forced_membership_message)(
+                self.message(message_id, media_group_id="album-1"),
+                bot,
+                update_id=update_id,
+            ) is True
+
+        state = ForcedMembershipUserState.objects.get(rule=self.rule, telegram_user_id=42)
+        assert bot.delete_message.await_count == 3
+        assert bot.send_message.await_count == 1
+        assert "reply_to_message_id" not in bot.send_message.await_args.kwargs
+        assert state.deleted_message_count == 3
 
     def test_failed_private_invite_creation_does_not_advance_warning_state(self):
         from aiogram.exceptions import TelegramNetworkError

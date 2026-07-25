@@ -1,4 +1,4 @@
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramAPIError
 from asgiref.sync import sync_to_async
 
 from botapp.models import GroupSettings, ModerationAction
@@ -50,7 +50,7 @@ async def queue_or_execute(
         )
     try:
         await execute_telegram_action(bot, moderation_action)
-    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+    except TelegramAPIError as exc:
         moderation_action.status = "failed"
         moderation_action.error = str(exc)
         await sync_to_async(moderation_action.save)(update_fields=["status", "error"])
