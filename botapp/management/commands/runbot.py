@@ -26,7 +26,7 @@ from django.utils import timezone
 from botapp.services import (
     add_warning,
     call_ai_api as request_ai_answer,
-    call_tina_api,
+    call_noya_api,
     clear_warnings,
     contains_blocked_word,
     consume_group_quota,
@@ -1059,12 +1059,12 @@ async def prompt(message: Message, command: CommandObject):
 
     if chat.type == ChatType.PRIVATE:
         await message.bot.send_chat_action(chat_id=chat.id, action="typing")
-        answer = await call_tina_api(question, session_id=f"telegram:{chat.id}")
+        answer = await call_noya_api(question, session_id=f"telegram:{chat.id}")
         await message.reply(answer)
         return
 
     await message.bot.send_chat_action(chat_id=chat.id, action="typing")
-    answer = await call_tina_api(question, session_id=f"telegram:{chat.id}")
+    answer = await call_noya_api(question, session_id=f"telegram:{chat.id}")
     await message.reply(answer)
 
 
@@ -1389,27 +1389,36 @@ async def handle_text_message(message: Message, bot: Bot):
     bot_info = await bot.me()
     bot_mention = f"@{bot_info.username}".lower()
     
-    # Check if the message is invoking Tina
-    is_tina = False
+    # Check if the message is invoking Noya
+    is_noya = False
     question = ""
     
-    if text_lower.startswith("تینا"):
-        is_tina = True
+    if text_lower.startswith("نویا"):
+        is_noya = True
         question = message.text[4:].strip()
-    elif text_lower.startswith("tina"):
-        is_tina = True
+    elif text_lower.startswith("noya"):
+        is_noya = True
+        question = message.text[4:].strip()
+    elif text_lower.startswith("nuya"):
+        is_noya = True
+        question = message.text[4:].strip()
+    elif text_lower.startswith("noia"):
+        is_noya = True
+        question = message.text[4:].strip()
+    elif text_lower.startswith("nuia"):
+        is_noya = True
         question = message.text[4:].strip()
     elif text_lower.startswith(bot_mention):
-        is_tina = True
+        is_noya = True
         question = message.text[len(bot_mention):].strip()
     elif message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id:
         # Replying directly to the bot
-        is_tina = True
+        is_noya = True
         question = message.text.strip()
 
-    if is_tina and question:
+    if is_noya and question:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        answer = await call_tina_api(question, session_id=f"telegram:{message.chat.id}")
+        answer = await call_noya_api(question, session_id=f"telegram:{message.chat.id}")
         await message.reply(answer)
         return
 

@@ -187,7 +187,7 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
         return True
 
 
-async def call_tina_api(question: str, session_id: str) -> str:
+async def call_noya_api(question: str, session_id: str) -> str:
     url = "http://127.0.0.1:20128/v1/chat/completions"
     headers = {
         "Authorization": "Bearer sk-6cf9c2d24721ff2f-2gpm4n-556acb70",
