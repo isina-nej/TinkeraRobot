@@ -478,3 +478,249 @@ class ForcedMembershipEvent(models.Model):
             models.Index(fields=["rule", "event_type", "created_at"]),
             models.Index(fields=["telegram_update_id"]),
         ]
+
+
+class MemoryConversation(models.Model):
+    platform = models.CharField(max_length=32, default="telegram")
+    chat_id = models.BigIntegerField()
+    thread_id = models.BigIntegerField(default=0)
+    conversation_id = models.CharField(max_length=128, blank=True, default="")
+    chat_type = models.CharField(max_length=32, blank=True, default="")
+    title = models.CharField(max_length=255, blank=True, default="")
+    summary = models.TextField(blank=True, default="")
+    last_activity_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["platform", "chat_id", "thread_id", "conversation_id"],
+                name="unique_memory_conversation_identity",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["platform", "chat_id"]),
+            models.Index(fields=["last_activity_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.platform}:{self.chat_id}:{self.thread_id}:{self.conversation_id}"
+
+
+class MemoryConversationMember(models.Model):
+    conversation = models.ForeignKey(
+        MemoryConversation,
+        on_delete=models.CASCADE,
+        related_name="members",
+    )
+    user = models.ForeignKey(
+        TelegramUser,
+        on_delete=models.CASCADE,
+        related_name="memory_memberships",
+    )
+    role = models.CharField(max_length=32, blank=True, default="member")
+    joined_at = models.DateTimeField(null=True, blank=True)
+    left_at = models.DateTimeField(null=True, blank=True)
+    last_activity_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "user"],
+                name="unique_memory_conversation_member",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["conversation", "last_activity_at"]),
+            models.Index(fields=["user", "last_activity_at"]),
+        ]
+
+
+class MemoryItem(models.Model):
+    class Scope(models.TextChoices):
+        USER = "user", "User global"
+        CONVERSATION = "conversation", "Conversation"
+        USER_CONVERSATION = "user_conversation", "User conversation"
+
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "Private"
+        CONVERSATION_ONLY = "conversation_only", "Conversation only"
+        USER_GLOBAL = "user_global", "User global"
+        GROUP_SHARED = "group_shared", "Group shared"
+        SYSTEM_ONLY = "system_only", "System only"
+
+    class Importance(models.TextChoices):
+        CRITICAL = "critical", "Critical"
+        IMPORTANT = "important", "Important"
+        MODERATELY_IMPORTANT = "moderately_important", "Moderately important"
+        UNIMPORTANT = "unimportant", "Unimportant"
+
+    class Retention(models.TextChoices):
+        SHORT = "short", "Short"
+        MEDIUM = "medium", "Medium"
+        LONG = "long", "Long"
+        CRITICAL = "critical", "Critical"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Active"
+        EXPIRED = "expired", "Expired"
+        SUPERSEDED = "superseded", "Superseded"
+        DELETED = "deleted", "Deleted"
+        ARCHIVED = "archived", "Archived"
+        PENDING_REVIEW = "pending_review", "Pending review"
+
+    class Category(models.TextChoices):
+        PREFERENCE = "preference", "Preference"
+        IDENTITY = "identity", "Identity"
+        PROJECT = "project", "Project"
+        DECISION = "decision", "Decision"
+        RELATIONSHIP = "relationship", "Relationship"
+        GOAL = "goal", "Goal"
+        CONSTRAINT = "constraint", "Constraint"
+        EVENT = "event", "Event"
+        OTHER = "other", "Other"
+
+    owner_user = models.ForeignKey(
+        TelegramUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="memory_items",
+    )
+    subject_user = models.ForeignKey(
+        TelegramUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subject_memory_items",
+    )
+    conversation = models.ForeignKey(
+        MemoryConversation,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memory_items",
+    )
+    memory_scope = models.CharField(max_length=24, choices=Scope.choices)
+    category = models.CharField(max_length=32, choices=Category.choices, default=Category.OTHER)
+    content = models.TextField()
+    normalized_content = models.TextField()
+    importance = models.CharField(max_length=24, choices=Importance.choices)
+    retention_level = models.CharField(max_length=16, choices=Retention.choices)
+    visibility = models.CharField(max_length=24, choices=Visibility.choices)
+    confidence = models.FloatField(default=0.0)
+    is_explicit = models.BooleanField(default=False)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_accessed_at = models.DateTimeField(null=True, blank=True)
+    last_confirmed_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    mention_count = models.PositiveIntegerField(default=1)
+    access_count = models.PositiveIntegerField(default=0)
+    source_count = models.PositiveIntegerField(default=0)
+    superseded_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="superseded_items",
+    )
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner_user", "status", "visibility"]),
+            models.Index(fields=["conversation", "status", "visibility"]),
+            models.Index(fields=["retention_level", "expires_at"]),
+            models.Index(fields=["category", "importance"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(confidence__gte=0, confidence__lte=1),
+                name="memory_item_confidence_between_zero_one",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        memory_scope="user",
+                        conversation__isnull=True,
+                        visibility="user_global",
+                    )
+                    | (
+                        models.Q(
+                            memory_scope__in=["conversation", "user_conversation"],
+                            conversation__isnull=False,
+                        )
+                        & ~models.Q(visibility="user_global")
+                    )
+                ),
+                name="memory_scope_visibility_consistent",
+            ),
+        ]
+
+
+class MemorySource(models.Model):
+    memory = models.ForeignKey(
+        MemoryItem,
+        on_delete=models.CASCADE,
+        related_name="sources",
+    )
+    speaker_user = models.ForeignKey(
+        TelegramUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memory_sources",
+    )
+    platform = models.CharField(max_length=32, default="telegram")
+    source_chat_id = models.BigIntegerField(null=True, blank=True)
+    source_message_id = models.BigIntegerField(null=True, blank=True)
+    source_thread_id = models.BigIntegerField(default=0)
+    source_kind = models.CharField(max_length=32, default="message")
+    occurred_at = models.DateTimeField(null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["memory", "platform", "source_chat_id", "source_message_id"],
+                name="unique_memory_source_message",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["source_chat_id", "source_message_id"]),
+            models.Index(fields=["speaker_user", "occurred_at"]),
+        ]
+
+
+class MemoryLifecycleEvent(models.Model):
+    memory = models.ForeignKey(
+        MemoryItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lifecycle_events",
+    )
+    event_type = models.CharField(max_length=32)
+    old_status = models.CharField(max_length=16, blank=True, default="")
+    new_status = models.CharField(max_length=16, blank=True, default="")
+    reason = models.CharField(max_length=255, blank=True, default="")
+    metadata = models.JSONField(default=dict, blank=True)
+    actor_user = models.ForeignKey(
+        TelegramUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memory_lifecycle_events",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["event_type", "created_at"]),
+            models.Index(fields=["memory", "created_at"]),
+        ]
