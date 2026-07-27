@@ -104,6 +104,7 @@ MEMORY_RETRIEVAL_ENABLED = os.getenv("MEMORY_RETRIEVAL_ENABLED", "true").lower()
 MEMORY_INGESTION_ENABLED = os.getenv("MEMORY_INGESTION_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 MEMORY_USER_COMMANDS_ENABLED = os.getenv("MEMORY_USER_COMMANDS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 MEMORY_FAIL_OPEN = os.getenv("MEMORY_FAIL_OPEN", "true").lower() in {"1", "true", "yes", "on"}
+MEMORY_LATENCY_LOGGING_ENABLED = os.getenv("MEMORY_LATENCY_LOGGING_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG

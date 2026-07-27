@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 from asgiref.sync import sync_to_async
@@ -189,11 +190,36 @@ async def run_ai_with_memory(
     provider: Callable[[str, str], Awaitable[str]],
     session_id: str,
 ) -> str:
+    start_total = time.perf_counter()
+    
+    t0 = time.perf_counter()
     context = await prepare_memory_context(message, question)
+    retrieval_ms = (time.perf_counter() - t0) * 1000
+
+    t1 = time.perf_counter()
     answer = await provider(append_memory_context(question, context.text), session_id)
+    ai_request_ms = (time.perf_counter() - t1) * 1000
+
+    ingestion_ms = 0
     if _successful_answer(answer):
+        t2 = time.perf_counter()
         await record_processed_message(message)
+        ingestion_ms = (time.perf_counter() - t2) * 1000
+    
+    total_handler_ms = (time.perf_counter() - start_total) * 1000
+    
+    if _enabled("MEMORY_LATENCY_LOGGING_ENABLED", False):
+        logger.info(
+            "Memory Latency - chat_type=%s retrieval_ms=%.1f ai_request_ms=%.1f ingestion_ms=%.1f total_ms=%.1f",
+            getattr(getattr(message, "chat", None), "type", "unknown"),
+            retrieval_ms,
+            ai_request_ms,
+            ingestion_ms,
+            total_handler_ms
+        )
+        
     return answer
+
 
 
 @sync_to_async(thread_sensitive=True)
