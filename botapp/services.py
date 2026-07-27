@@ -188,6 +188,8 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
         return True
 
 
+from botapp.ai import build_ai_messages
+
 async def call_noya_api(question: str, session_id: str) -> str:
     api_key = os.getenv("NOYA_API_KEY", "").strip()
     if not api_key:
@@ -202,7 +204,7 @@ async def call_noya_api(question: str, session_id: str) -> str:
     payload = {
         "model": os.getenv("NOYA_MODEL", "TinkeraBot").strip(),
         "stream": False,
-        "messages": [{"role": "user", "content": question}],
+        "messages": build_ai_messages(question),
     }
     try:
         async with httpx.AsyncClient(timeout=None) as client:
@@ -218,7 +220,7 @@ async def call_noya_api(question: str, session_id: str) -> str:
 async def call_ai_api(api_url: str, question: str, session_id: str) -> str:
     payload = {
         "sessionId": session_id,
-        "messages": [{"role": "user", "content": question}],
+        "messages": build_ai_messages(question),
     }
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:

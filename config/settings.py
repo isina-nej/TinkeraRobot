@@ -106,6 +106,8 @@ MEMORY_USER_COMMANDS_ENABLED = os.getenv("MEMORY_USER_COMMANDS_ENABLED", "true")
 MEMORY_FAIL_OPEN = os.getenv("MEMORY_FAIL_OPEN", "true").lower() in {"1", "true", "yes", "on"}
 MEMORY_LATENCY_LOGGING_ENABLED = os.getenv("MEMORY_LATENCY_LOGGING_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
+NOYA_SYSTEM_PROMPT_ENABLED = os.getenv("NOYA_SYSTEM_PROMPT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True

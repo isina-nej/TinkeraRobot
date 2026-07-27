@@ -178,3 +178,16 @@ cp .env.example .env
 
 فایل `.env`، دیتابیس، لاگ و PID در مخزن نگهداری نمی‌شوند. توکن‌های افشاشده را در BotFather لغو و جایگزین کنید. در محیط production باید `DEBUG=false` و `DJANGO_SECRET_KEY` و `ALLOWED_HOSTS` معتبر تنظیم شوند.
 # TinkeraRobot
+
+## ۶. راهنمای هوش مصنوعی و System Prompt
+
+پرامپت سیستمی اصلی شخصیت «نویا» در مسیر زیر قرار دارد:
+`botapp/ai/prompts.py`
+
+- **نسخه پرامپت**: `NOYA_SYSTEM_PROMPT_VERSION = "v1"`
+- **نحوه اتصال:** در فایل `botapp/services.py` از تابع `build_ai_messages` استفاده شده تا پرامپت دقیقاً در نقش `system` و قبل از متون کاربر و Context حافظه به `Payload` اضافه‌شود.
+- **ویژگی‌ها:**
+  - در یک Request فقط یک بار System Prompt ارسال می‌شود.
+  - متن Prompt در دیتابیس (حافظه)، لاگ‌های عمومی یا متن پیام‌های فورواردشده ذخیره نمی‌شود.
+  - با استفاده از فلگ متغیرمحیطی `NOYA_SYSTEM_PROMPT_ENABLED=false` می‌توان در زمان دیباگ یا رول‌بک آن را غیرفعال کرد.
+
