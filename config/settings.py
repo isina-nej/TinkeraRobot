@@ -100,6 +100,10 @@ MEMORY_MAX_CONTEXT_TOKENS = int(os.getenv("MEMORY_MAX_CONTEXT_TOKENS", "600"))
 MEMORY_EXTRACTION_ENABLED = os.getenv("MEMORY_EXTRACTION_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
 }
+MEMORY_RETRIEVAL_ENABLED = os.getenv("MEMORY_RETRIEVAL_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+MEMORY_INGESTION_ENABLED = os.getenv("MEMORY_INGESTION_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+MEMORY_USER_COMMANDS_ENABLED = os.getenv("MEMORY_USER_COMMANDS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+MEMORY_FAIL_OPEN = os.getenv("MEMORY_FAIL_OPEN", "true").lower() in {"1", "true", "yes", "on"}
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG

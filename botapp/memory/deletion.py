@@ -6,13 +6,23 @@ from botapp.models import MemoryItem, MemoryLifecycleEvent
 
 
 @transaction.atomic
-def forget_memories(user_id: int, query: str = "", conversation_id: int | None = None) -> int:
+def forget_memories(
+    user_id: int,
+    query: str = "",
+    conversation_id: int | None = None,
+    memory_scope: str | None = None,
+) -> int:
     queryset = MemoryItem.objects.select_for_update().filter(
         owner_user__telegram_user_id=user_id,
         status__in=[MemoryItem.Status.ACTIVE, MemoryItem.Status.EXPIRED, MemoryItem.Status.SUPERSEDED],
     )
     if conversation_id is not None:
         queryset = queryset.filter(conversation_id=conversation_id)
+    if memory_scope is not None:
+        if isinstance(memory_scope, (tuple, list, set)):
+            queryset = queryset.filter(memory_scope__in=memory_scope)
+        else:
+            queryset = queryset.filter(memory_scope=memory_scope)
     terms = [term for term in " ".join((query or "").casefold().split()).split() if term]
     items = [
         item for item in queryset

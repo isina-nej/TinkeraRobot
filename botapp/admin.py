@@ -1,5 +1,8 @@
 from django.contrib import admin
 
+# Register memory models without mixing runtime privacy policy into admin.
+from botapp.memory import admin as memory_admin  # noqa: F401
+
 from botapp.models import (
     BotMessageSettings,
     BotStartGateEvent,
@@ -17,6 +20,11 @@ from botapp.models import (
     StaffAPIKey,
     TelegramUser,
     Warning,
+    MemoryConversation,
+    MemoryConversationMember,
+    MemoryItem,
+    MemorySource,
+    MemoryLifecycleEvent,
 )
 
 

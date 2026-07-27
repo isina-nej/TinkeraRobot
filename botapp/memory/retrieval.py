@@ -18,7 +18,7 @@ def retrieve_memories(user_id: int, conversation: MemoryConversation, query: str
     terms = _terms(query)
     scored = []
     for item in queryset:
-        if not is_retrievable(item, user_id, conversation.id):
+        if not is_retrievable(item, user_id, conversation.id, conversation.chat_type):
             continue
         haystack = f"{item.content} {item.category}".casefold()
         score = sum(1 for term in terms if term in haystack)

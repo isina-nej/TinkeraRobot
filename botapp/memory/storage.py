@@ -85,9 +85,17 @@ def ingest_candidate(
         queryset = queryset.filter(memory_scope=MemoryItem.Scope.USER)
     else:
         queryset = queryset.filter(conversation=conversation, memory_scope=scope)
+    source_exists = False
+    if message_id is not None:
+        source_exists = MemorySource.objects.filter(
+            platform=conversation.platform,
+            source_chat_id=conversation.chat_id,
+            source_message_id=message_id,
+        ).exists()
     item = queryset.first()
     if item:
-        item.mention_count += 1
+        if not source_exists:
+            item.mention_count += 1
         item.last_confirmed_at = timestamp
         item.confidence = max(item.confidence, candidate.confidence)
         item.save(update_fields=["mention_count", "last_confirmed_at", "confidence", "updated_at"])
@@ -149,7 +157,12 @@ def ingest_candidate(
 
 
 def ingest_message(user_id, conversation, message_id, text, timestamp=None, **flags):
-    candidates = extract_candidates(text, **flags)
+    extraction_flags = {
+        key: value
+        for key, value in flags.items()
+        if key in {"is_command", "is_forwarded", "is_moderation", "operation"}
+    }
+    candidates = extract_candidates(text, **extraction_flags)
     return [
         item
         for candidate in candidates

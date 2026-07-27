@@ -61,6 +61,12 @@ from botapp.bot_start_gate import (
 from botapp.moderation import warning_ceiling_spec
 from botapp.telegram_moderation import queue_or_execute
 from botapp.template_renderer import render_member_template
+from botapp.memory.commands import (
+    forget_all_command,
+    forget_command,
+    memories_command,
+)
+from botapp.memory.integration import run_ai_with_memory
 logger = logging.getLogger(__name__)
 
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID", "@CoffeeMan_nej").strip()
@@ -1053,6 +1059,21 @@ async def manage_allowed_domain(message: Message, command: CommandObject, bot: B
     await message.reply(f"دامنه‌های مجاز به‌روزرسانی شد؛ {len(domains)} مورد فعال است.")
 
 
+@router.message(Command("memories"))
+async def memories(message: Message):
+    await memories_command(message)
+
+
+@router.message(Command("forget"))
+async def forget_memory(message: Message, command: CommandObject):
+    await forget_command(message, action_reason(command))
+
+
+@router.message(Command("forget_all"))
+async def forget_all_memory(message: Message, command: CommandObject):
+    await forget_all_command(message, action_reason(command))
+
+
 @router.message(Command("prompt"))
 async def prompt(message: Message, command: CommandObject):
     chat = message.chat
@@ -1065,12 +1086,22 @@ async def prompt(message: Message, command: CommandObject):
 
     if chat.type == ChatType.PRIVATE:
         await message.bot.send_chat_action(chat_id=chat.id, action="typing")
-        answer = await call_noya_api(question, session_id=f"telegram:{chat.id}")
+        answer = await run_ai_with_memory(
+            message,
+            question,
+            call_noya_api,
+            session_id=f"telegram:{chat.id}",
+        )
         await message.reply(answer)
         return
 
     await message.bot.send_chat_action(chat_id=chat.id, action="typing")
-    answer = await call_noya_api(question, session_id=f"telegram:{chat.id}")
+    answer = await run_ai_with_memory(
+        message,
+        question,
+        call_noya_api,
+        session_id=f"telegram:{chat.id}",
+    )
     await message.reply(answer)
 
 
@@ -1424,7 +1455,12 @@ async def handle_text_message(message: Message, bot: Bot):
 
     if is_noya and question:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        answer = await call_noya_api(question, session_id=f"telegram:{message.chat.id}")
+        answer = await run_ai_with_memory(
+            message,
+            question,
+            call_noya_api,
+            session_id=f"telegram:{message.chat.id}",
+        )
         await message.reply(answer)
         return
 
@@ -1457,7 +1493,12 @@ async def handle_text_message(message: Message, bot: Bot):
         )
         return
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    answer = await call_ai_api(question, session_id=f"telegram:{message.chat.id}")
+    answer = await run_ai_with_memory(
+        message,
+        question,
+        call_ai_api,
+        session_id=f"telegram:{message.chat.id}",
+    )
     await message.reply(answer)
 
 
