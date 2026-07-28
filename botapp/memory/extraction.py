@@ -23,6 +23,13 @@ _PATTERNS = (
     (re.compile(r"^(?:من|کار من)\s+(?:یک )?(.+?)\s+هستم$", re.I), "identity"),
 )
 
+# Leading bot triggers / mentions so "نویا یادت باشه X" still extracts.
+_TRIGGER_PREFIX = re.compile(
+    r"^(?:(?:@?(?:nuyarobot|noyarobot|noya|nuya|noia|nuia)|نویا)\s+)+",
+    re.I,
+)
+_TRAILING_MENTION = re.compile(r"(?:\s+@\w+)+$", re.I)
+
 _SKIP_PREFIXES = (
     "/", "ترجمه", "ترجمه کن", "بازنویسی", "بازنویسی کن", "بررسی کن",
     "rewrite", "translate", "summarize", "خلاصه کن",
@@ -31,6 +38,12 @@ _SKIP_PREFIXES = (
 
 def normalize_content(text: str) -> str:
     return " ".join(text.casefold().strip().split())
+
+
+def _prepare_text(text: str) -> str:
+    clean = " ".join(text.strip().split())
+    clean = _TRIGGER_PREFIX.sub("", clean).strip()
+    return _TRAILING_MENTION.sub("", clean).strip()
 
 
 def extract_candidates(
@@ -43,7 +56,7 @@ def extract_candidates(
 ) -> list[MemoryCandidate]:
     if not isinstance(text, str):
         return []
-    clean = " ".join(text.strip().split())
+    clean = _prepare_text(text)
     if not clean or is_command or is_forwarded or is_moderation:
         return []
     if operation in {"translate", "rewrite", "summarize", "review"}:
@@ -56,6 +69,7 @@ def extract_candidates(
         if not match:
             continue
         value = match.group(1).strip(" .،")
+        value = _TRAILING_MENTION.sub("", value).strip(" .،")
         if len(value) < 2:
             return []
         category = "preference" if kind in {"explicit", "preference"} else "identity"

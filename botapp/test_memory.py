@@ -41,6 +41,19 @@ class MemoryCoreTest(TestCase):
         assert candidates[0].is_explicit is True
         assert extract_candidates("امروز هوا چطور است؟") == []
 
+    def test_noya_trigger_and_mention_still_extract_explicit_memory(self):
+        for text in (
+            "نویا یادت باشه که من خیلی رنگ آبی رو دوست دارم",
+            "noya یادت باشه زبان پاسخ‌گویی من فارسی باشد",
+            "@NuyaRobot یادت باشه موضوع این گروه خصوصی است",
+            "یادت باشه من رنگ آبی رو دوست دارم @NuyaRobot",
+        ):
+            candidates = extract_candidates(text)
+            assert len(candidates) == 1, text
+            assert candidates[0].is_explicit is True
+            assert "آبی" in candidates[0].content or "فارسی" in candidates[0].content or "خصوصی" in candidates[0].content
+            assert "@" not in candidates[0].content
+
     def test_commands_forwarded_moderation_and_transform_operations_are_not_stored(self):
         for text, flags in (
             ("/start یادت باشه فارسی", {"is_command": True}),
