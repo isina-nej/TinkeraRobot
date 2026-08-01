@@ -3,13 +3,15 @@ import logging
 import os
 import re
 import socket
+from collections import OrderedDict
 from datetime import time, timedelta
 from html import escape
+from time import monotonic
 
 from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandError
 
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
@@ -75,8 +77,14 @@ ADMIN_IDS = frozenset(
     for value in os.getenv("ADMIN_IDS", "").split(",")
     if value.strip()
 )
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-BOT_USERNAME = os.getenv("BOT_USERNAME", OFFICIAL_BOT_USERNAME).strip().lstrip("@")
+def parse_bot_tokens(bot_tokens: str = "", bot_token: str = "") -> tuple[str, ...]:
+    values = re.split(r"[\s,]+", bot_tokens.strip()) if bot_tokens.strip() else []
+    if bot_token.strip():
+        values.append(bot_token.strip())
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+BOT_TOKENS = parse_bot_tokens(os.getenv("BOT_TOKENS", ""), os.getenv("BOT_TOKEN", ""))
 COLLAB_DISABLED_TEXT = "ادمین گزینه همکاری را غیر فعال کرده است."
 PROMPT_URL_PREFIX = os.getenv("PROMPT_URL_PREFIX", "https://ai.tinkera.org/chat/")
 AI_API_URL = os.getenv("AI_API_URL", "https://ai.tinkera.org/api/chat")
@@ -413,31 +421,31 @@ def is_group_chat(message: Message) -> bool:
     return message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}
 
 
-def is_bot_mentioned(message: Message) -> bool:
-    if not BOT_USERNAME:
+def is_bot_mentioned(message: Message, bot_username: str) -> bool:
+    if not bot_username:
         return False
 
     if message.reply_to_message:
         replied_user = message.reply_to_message.from_user
-        if replied_user and replied_user.username == BOT_USERNAME:
+        if replied_user and replied_user.username == bot_username:
             return True
 
     if message.text:
-        pattern = rf'@{re.escape(BOT_USERNAME)}'
+        pattern = rf'@{re.escape(bot_username)}'
         if re.search(pattern, message.text):
             return True
 
     return False
 
 
-def extract_question_from_mention(message: Message) -> str:
+def extract_question_from_mention(message: Message, bot_username: str) -> str:
     if not message.text:
         return ""
 
-    if not BOT_USERNAME:
+    if not bot_username:
         return message.text
 
-    pattern = rf'@{re.escape(BOT_USERNAME)}\s*'
+    pattern = rf'@{re.escape(bot_username)}\s*'
     question = re.sub(pattern, '', message.text).strip()
 
     return question
@@ -1481,9 +1489,9 @@ async def handle_text_message(message: Message, bot: Bot):
         await handlers[moderation_command]()
         return
 
-    if not group.collaboration_enabled or not is_bot_mentioned(message):
+    if not group.collaboration_enabled or not is_bot_mentioned(message, bot_info.username or ""):
         return
-    question = extract_question_from_mention(message)
+    question = extract_question_from_mention(message, bot_info.username or "")
     if not question:
         await message.reply("سوال خود را بنویسید.")
         return
@@ -1579,11 +1587,73 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
-def build_dispatcher(bot_username: str) -> Dispatcher:
+class MultiBotGroupDeduplicationMiddleware(BaseMiddleware):
+    """Discard duplicate group updates only after Aiogram matched a handler."""
+
+    def __init__(
+        self,
+        bot_usernames: tuple[str, ...] = (),
+        *,
+        ttl_seconds: int = 600,
+        max_entries: int = 100_000,
+    ):
+        self.bot_usernames = frozenset(username.casefold() for username in bot_usernames if username)
+        self.ttl_seconds = ttl_seconds
+        self.max_entries = max_entries
+        self._seen = OrderedDict()
+
+    async def _key(self, event, data):
+        chat = getattr(event, "chat", None)
+        if not chat or chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            return None
+        if isinstance(event, Message):
+            text = event.text or ""
+            target = re.search(r"(?:^/[^\s@]+|@)([A-Za-z0-9_]{5,})\b", text)
+            if target and target.group(1).casefold() in self.bot_usernames:
+                username = (await data["bot"].me()).username or ""
+                if target.group(1).casefold() != username.casefold():
+                    return "not-targeted"
+            update = data.get("event_update")
+            kind = "edited_message" if getattr(update, "edited_message", None) else "message"
+            return kind, chat.id, event.message_id
+        if isinstance(event, ChatMemberUpdated):
+            return (
+                "chat_member",
+                chat.id,
+                event.new_chat_member.user.id,
+                int(event.date.timestamp()),
+                str(event.old_chat_member.status),
+                str(event.new_chat_member.status),
+            )
+        return None
+
+    async def __call__(self, handler, event, data):
+        key = await self._key(event, data)
+        if key == "not-targeted":
+            return None
+        if key is None:
+            return await handler(event, data)
+        now = monotonic()
+        while self._seen and (
+            next(iter(self._seen.values())) <= now - self.ttl_seconds
+            or len(self._seen) >= self.max_entries
+        ):
+            self._seen.popitem(last=False)
+        if key in self._seen:
+            return None
+        self._seen[key] = now
+        return await handler(event, data)
+
+
+def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] = ()) -> Dispatcher:
     dispatcher = Dispatcher()
+    deduplication = MultiBotGroupDeduplicationMiddleware(bot_usernames)
+    dispatcher.message.outer_middleware(deduplication)
+    dispatcher.edited_message.outer_middleware(deduplication)
+    dispatcher.chat_member.outer_middleware(deduplication)
     dispatcher.message.outer_middleware(ForcedMembershipMiddleware())
-    dispatcher.message.outer_middleware(BotStartGateMiddleware(bot_username))
-    dispatcher.edited_message.outer_middleware(BotStartGateMiddleware(bot_username))
+    dispatcher.message.outer_middleware(BotStartGateMiddleware())
+    dispatcher.edited_message.outer_middleware(BotStartGateMiddleware())
 
     # Routers are module-level singletons.
     # Tests call build_dispatcher() repeatedly in the same process.
@@ -1605,8 +1675,8 @@ class Command(BaseCommand):
     help = "Run Telegram Bot with aiogram 3"
 
     def handle(self, *args, **options):
-        if not BOT_TOKEN:
-            raise CommandError("BOT_TOKEN is not set in the environment.")
+        if not BOT_TOKENS:
+            raise CommandError("BOT_TOKENS or BOT_TOKEN is not set in the environment.")
 
         _original_getaddrinfo = socket.getaddrinfo
 
@@ -1616,20 +1686,24 @@ class Command(BaseCommand):
         socket.getaddrinfo = _ipv4_only_getaddrinfo
 
         async def run():
-            async with Bot(token=BOT_TOKEN) as bot:
-                bot_user = await bot.get_me()
-                global BOT_USERNAME
-                BOT_USERNAME = BOT_USERNAME or (bot_user.username or "")
-
+            bots = [Bot(token=token) for token in BOT_TOKENS]
+            try:
+                identities = await asyncio.gather(*(bot.get_me() for bot in bots))
                 configure_super_admins(ADMIN_IDS)
-                dispatcher = build_dispatcher(BOT_USERNAME)
-                cleanup_task = asyncio.create_task(notice_cleanup_loop(bot))
-                self.stdout.write("Telegram bot is running.")
+                dispatcher = build_dispatcher(
+                    bot_usernames=tuple(identity.username or "" for identity in identities),
+                )
+                cleanup_tasks = [asyncio.create_task(notice_cleanup_loop(bot)) for bot in bots]
+                usernames = ", ".join(f"@{identity.username}" for identity in identities)
+                self.stdout.write(f"{len(bots)} Telegram bots are running: {usernames}")
                 try:
-                    await dispatcher.start_polling(bot)
+                    await dispatcher.start_polling(*bots, close_bot_session=False)
                 finally:
-                    cleanup_task.cancel()
-                    await asyncio.gather(cleanup_task, return_exceptions=True)
+                    for task in cleanup_tasks:
+                        task.cancel()
+                    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            finally:
+                await asyncio.gather(*(bot.session.close() for bot in bots))
 
         try:
             asyncio.run(run())

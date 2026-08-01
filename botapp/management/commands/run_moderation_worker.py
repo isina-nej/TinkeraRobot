@@ -4,7 +4,7 @@ import time
 from aiogram import Bot
 from django.core.management.base import BaseCommand, CommandError
 
-from botapp.management.commands.runbot import BOT_TOKEN
+from botapp.management.commands.runbot import BOT_TOKENS
 from botapp.models import ModerationAction, ModerationLog
 from botapp.moderation import (
     claim_due_actions,
@@ -16,18 +16,27 @@ from botapp.moderation import (
 from botapp.telegram_gateway import execute_telegram_action
 
 
-async def execute_claimed(bot, action_id):
+async def execute_claimed(bots, action_id):
     action = await ModerationAction.objects.select_related("group").aget(pk=action_id)
     if action.status != "processing":
         return
-    try:
-        if action.target_user_id and action.action in {"mute", "ban"}:
-            member = await bot.get_chat_member(action.group.chat_id, action.target_user_id)
-            if member.status in {"creator", "administrator"}:
-                raise ValueError("target is a group administrator")
-        await execute_telegram_action(bot, action)
-    except Exception as exc:
-        await asyncio.to_thread(mark_action_failed, action, exc)
+    last_error = None
+    for bot in bots:
+        try:
+            if action.target_user_id and action.action in {"mute", "ban"}:
+                member = await bot.get_chat_member(action.group.chat_id, action.target_user_id)
+                if member.status in {"creator", "administrator"}:
+                    raise ValueError("target is a group administrator")
+            await execute_telegram_action(bot, action)
+        except ValueError as exc:
+            await asyncio.to_thread(mark_action_failed, action, exc)
+            return
+        except Exception as exc:
+            last_error = exc
+            continue
+        break
+    else:
+        await asyncio.to_thread(mark_action_failed, action, last_error or RuntimeError("No bot available"))
         return
     action, _ = await asyncio.to_thread(complete_action, action)
     await ModerationLog.objects.acreate(
@@ -49,9 +58,12 @@ async def run_batch(limit):
     action_ids = await asyncio.to_thread(claim_due_actions, limit)
     if not action_ids:
         return 0
-    async with Bot(BOT_TOKEN) as bot:
+    bots = [Bot(token) for token in BOT_TOKENS]
+    try:
         for action_id in action_ids:
-            await execute_claimed(bot, action_id)
+            await execute_claimed(bots, action_id)
+    finally:
+        await asyncio.gather(*(bot.session.close() for bot in bots))
     return len(action_ids)
 
 
@@ -64,8 +76,8 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=100)
 
     def handle(self, *args, **options):
-        if not BOT_TOKEN:
-            raise CommandError("BOT_TOKEN is not set.")
+        if not BOT_TOKENS:
+            raise CommandError("BOT_TOKENS or BOT_TOKEN is not set.")
         while True:
             processed = asyncio.run(run_batch(max(options["limit"], 1)))
             if options["once"]:

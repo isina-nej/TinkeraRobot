@@ -666,14 +666,17 @@ def mark_user_started(user_id: int):
 
 
 class BotStartGateService:
-    def __init__(self, bot_username: str):
+    def __init__(self, bot_username: str = ""):
         self.bot_username = bot_username
 
     async def check_user_access(self, message: Message, bot, *, telegram_update_id=None) -> bool:
+        bot_username = self.bot_username
+        if not bot_username:
+            bot_username = (await bot.me()).username or OFFICIAL_BOT_USERNAME
         return await enforce_bot_start_message(
             message,
             bot,
-            bot_username=self.bot_username,
+            bot_username=bot_username,
             telegram_update_id=telegram_update_id,
         )
 
@@ -695,7 +698,7 @@ class BotStartGateService:
 
 
 class BotStartGateMiddleware(BaseMiddleware):
-    def __init__(self, bot_username: str):
+    def __init__(self, bot_username: str = ""):
         self.service = BotStartGateService(bot_username)
 
     async def __call__(self, handler, event, data):
