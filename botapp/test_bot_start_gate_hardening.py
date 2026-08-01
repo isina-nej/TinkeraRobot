@@ -251,7 +251,7 @@ class BotStartGateHardeningTest(TestCase):
         assert BotStartGateEvent.objects.count() == 1
 
     def test_start_succeeds_when_warning_cleanup_has_network_error(self):
-        from botapp.management.commands.runbot import start
+        from botapp.management.commands.runbot import send_welcome
         from botapp.models import GroupUserGateState
 
         GroupUserGateState.objects.create(
@@ -265,9 +265,8 @@ class BotStartGateHardeningTest(TestCase):
             answer=AsyncMock(),
         )
         bot = AsyncMock()
-        bot.delete_message.side_effect = TelegramNetworkError(method=AsyncMock(), message="offline")
-
-        async_to_sync(start)(message, bot)
+        bot.delete_message.side_effect = TelegramNetworkError(method=AsyncMock(), message="boom")
+        async_to_sync(send_welcome)(message, bot)
 
         user = TelegramUser.objects.get(telegram_user_id=42)
         assert user.started is True and user.blocked is False

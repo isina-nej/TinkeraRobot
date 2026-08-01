@@ -4,7 +4,6 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
-
 class TelegramUser(models.Model):
     telegram_user_id = models.BigIntegerField(unique=True)
     started = models.BooleanField(default=False)
@@ -13,7 +12,6 @@ class TelegramUser(models.Model):
 
     def __str__(self):
         return str(self.telegram_user_id)
-
 
 class BotMessageSettings(models.Model):
     start_message = models.TextField(default="ربات استارت شد!")
@@ -26,7 +24,6 @@ class BotMessageSettings(models.Model):
 
     def __str__(self):
         return f"BotMessageSettings({self.pk})"
-
 
 class GroupQuota(models.Model):
     """Daily AI request quota per group."""
@@ -43,10 +40,8 @@ class GroupQuota(models.Model):
     def __str__(self):
         return f"GroupQuota({self.chat_id}) - {self.tokens_used_today}/{self.daily_prompt_limit}"
 
-
 def generate_token() -> str:
     return secrets.token_urlsafe(32)
-
 
 class ChatLink(models.Model):
     token = models.CharField(max_length=64, unique=True, default=generate_token, editable=False)
@@ -64,7 +59,6 @@ class ChatLink(models.Model):
 
     def __str__(self):
         return f"ChatLink({self.token[:8]}...) -> {self.group_chat_id}"
-
 
 class GroupSettings(models.Model):
     chat_id = models.BigIntegerField(unique=True)
@@ -116,10 +110,25 @@ class GroupSettings(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    welcome_emoji = models.ForeignKey(
+        "CustomEmoji",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="welcomed_in_groups",
+        help_text="Custom emoji to use in welcome messages for this group.",
+    )
+    welcome_emoji = models.ForeignKey(
+        "CustomEmoji",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="welcomed_in_groups",
+        help_text="Custom emoji to use in welcome messages for this group.",
+    )
 
     def __str__(self):
         return f"GroupSettings({self.chat_id}) - {self.chat_title}"
-
 
 class GroupActionLog(models.Model):
     group = models.ForeignKey(
@@ -139,7 +148,6 @@ class GroupActionLog(models.Model):
 
     def __str__(self):
         return f"Log({self.group.chat_id}) {self.action} by {self.admin_user_id}"
-
 
 class Warning(models.Model):
     group = models.ForeignKey(
@@ -165,7 +173,6 @@ class Warning(models.Model):
         return self.revoked_at is None and (
             self.expires_at is None or timezone.now() < self.expires_at
         )
-
 
 class ModerationAction(models.Model):
     ACTIONS = (
@@ -213,7 +220,6 @@ class ModerationAction(models.Model):
             models.Index(fields=["group", "target_user_id", "status"]),
         ]
 
-
 class GroupSchedule(models.Model):
     ACTIONS = (("lock", "Lock"), ("unlock", "Unlock"))
 
@@ -237,7 +243,6 @@ class GroupSchedule(models.Model):
             )
         ]
 
-
 class StaffAPIKey(models.Model):
     name = models.CharField(max_length=100)
     prefix = models.CharField(max_length=12, db_index=True)
@@ -253,7 +258,6 @@ class StaffAPIKey(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
-
 
 class ModerationLog(models.Model):
     ACTIONS = (
@@ -294,7 +298,6 @@ class ModerationLog(models.Model):
         ordering = ["-created_at"]
         indexes = [models.Index(fields=["group", "-created_at"])]
 
-
 class GroupUserGateState(models.Model):
     group = models.ForeignKey(
         GroupSettings,
@@ -321,7 +324,6 @@ class GroupUserGateState(models.Model):
             )
         ]
         indexes = [models.Index(fields=["group", "telegram_user_id"])]
-
 
 class BotStartGateEvent(models.Model):
     STATUS_CHOICES = (
@@ -351,7 +353,6 @@ class BotStartGateEvent(models.Model):
             )
         ]
         indexes = [models.Index(fields=["group", "telegram_user_id", "status"])]
-
 
 class ForcedMembershipRule(models.Model):
     source_group = models.ForeignKey(
@@ -386,7 +387,6 @@ class ForcedMembershipRule(models.Model):
 
     def __str__(self):
         return f"{self.source_group.chat_id} -> {self.destination_chat_id}"
-
 
 class ForcedMembershipUserState(models.Model):
     rule = models.ForeignKey(
@@ -431,7 +431,6 @@ class ForcedMembershipUserState(models.Model):
             models.Index(fields=["rule", "is_currently_member"]),
         ]
 
-
 class ForcedMembershipInviteLink(models.Model):
     rule = models.ForeignKey(
         ForcedMembershipRule,
@@ -450,7 +449,6 @@ class ForcedMembershipInviteLink(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["rule", "telegram_user_id", "is_revoked"])]
-
 
 class ForcedMembershipEvent(models.Model):
     rule = models.ForeignKey(
@@ -479,7 +477,6 @@ class ForcedMembershipEvent(models.Model):
             models.Index(fields=["telegram_update_id"]),
         ]
 
-
 class MemoryConversation(models.Model):
     platform = models.CharField(max_length=32, default="telegram")
     chat_id = models.BigIntegerField()
@@ -487,7 +484,8 @@ class MemoryConversation(models.Model):
     conversation_id = models.CharField(max_length=128, blank=True, default="")
     chat_type = models.CharField(max_length=32, blank=True, default="")
     title = models.CharField(max_length=255, blank=True, default="")
-    summary = models.TextField(blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+
     last_activity_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -499,6 +497,7 @@ class MemoryConversation(models.Model):
                 name="unique_memory_conversation_identity",
             )
         ]
+
         indexes = [
             models.Index(fields=["platform", "chat_id"]),
             models.Index(fields=["last_activity_at"]),
@@ -506,7 +505,6 @@ class MemoryConversation(models.Model):
 
     def __str__(self):
         return f"{self.platform}:{self.chat_id}:{self.thread_id}:{self.conversation_id}"
-
 
 class MemoryConversationMember(models.Model):
     conversation = models.ForeignKey(
@@ -537,7 +535,6 @@ class MemoryConversationMember(models.Model):
             models.Index(fields=["conversation", "last_activity_at"]),
             models.Index(fields=["user", "last_activity_at"]),
         ]
-
 
 class MemoryItem(models.Model):
     class Scope(models.TextChoices):
@@ -661,7 +658,6 @@ class MemoryItem(models.Model):
             ),
         ]
 
-
 class MemorySource(models.Model):
     memory = models.ForeignKey(
         MemoryItem,
@@ -696,7 +692,6 @@ class MemorySource(models.Model):
             models.Index(fields=["speaker_user", "occurred_at"]),
         ]
 
-
 class MemoryLifecycleEvent(models.Model):
     memory = models.ForeignKey(
         MemoryItem,
@@ -724,3 +719,21 @@ class MemoryLifecycleEvent(models.Model):
             models.Index(fields=["event_type", "created_at"]),
             models.Index(fields=["memory", "created_at"]),
         ]
+
+
+class CustomEmoji(models.Model):
+    name = models.CharField(
+        max_length=50, unique=True, help_text="A unique name for the emoji, e.g., 'fire_animated'"
+    )
+    custom_emoji_id = models.CharField(
+        max_length=100, unique=True, help_text="The actual custom emoji ID from Telegram"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.custom_emoji_id})"
+
+    class Meta:
+        verbose_name = "Custom Emoji"
+        verbose_name_plural = "Custom Emojis"
+        ordering = ["name"]

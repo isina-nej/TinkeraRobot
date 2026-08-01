@@ -69,6 +69,8 @@ from botapp.memory.commands import (
     memories_command,
 )
 from botapp.memory.integration import run_ai_with_memory
+from botapp.emoji_handlers import router as emoji_router
+from botapp.nouya_handler import router as nouya_router
 logger = logging.getLogger(__name__)
 
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID", "@CoffeeMan_nej").strip()
@@ -530,20 +532,52 @@ async def process_moderation(message: Message, bot: Bot, group: GroupSettings) -
 
 
 
+
+async def render_text_with_custom_emojis(text: str) -> str:
+    from botapp.models import CustomEmoji
+    import re
+
+    # This can be slow. A better approach would be to cache emojis.
+    # ponytail: cache emojis
+    @sync_to_async
+    def get_all_emojis():
+        return {emoji.name: emoji.custom_emoji_id for emoji in CustomEmoji.objects.all()}
+
+    emoji_map = await get_all_emojis()
+
+    def replace_emoji_tag(match):
+        emoji_name = match.group(1)
+        if emoji_id := emoji_map.get(emoji_name):
+            return f'<tg-emoji emoji-id="{emoji_id}">✨</tg-emoji>'
+        return match.group(0)
+
+    return re.sub(r"<emoji id=([\w-]+)>", replace_emoji_tag, text)
+
+
 @router.message(Command("start"))
-async def start(message: Message, bot: Bot, command: CommandObject | None = None):
-    if message.chat.type == ChatType.PRIVATE:
-        if command and command.args:
-            parse_deep_link_payload(command.args, current_user_id=message.from_user.id)
-        _, notice_targets = await mark_user_started(message.from_user.id)
-        for state_id, chat_id, message_id in notice_targets:
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except TelegramAPIError:
-                pass
-            else:
-                await clear_notice_record(state_id, message_id)
-        await message.answer(WELCOME_TEXT)
+async def send_welcome(message: Message, bot: Bot, command: CommandObject | None = None):
+    user = message.from_user
+    if not user:
+        return
+
+    deep_link_payload = command.args if command else ""
+    if deep_link_payload:
+        payload = parse_deep_link_payload(
+            deep_link_payload, current_user_id=user.id
+        )
+        if payload:
+            payload_type, _ = payload
+            if payload_type == "start":
+                await mark_user_started(user.id)
+                settings = await get_message_settings()
+                text = await render_text_with_custom_emojis(settings["start_message"])
+                await message.answer(text, parse_mode="HTML")
+                return
+
+    settings = await get_message_settings()
+    text = await render_text_with_custom_emojis(settings["start_message"])
+    await message.answer(text, parse_mode="HTML")
+    await mark_user_started(user.id)
 
 
 @router.message(Command("rules"))
@@ -1659,7 +1693,7 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
     # Tests call build_dispatcher() repeatedly in the same process.
     # Must detach properly by cleaning sub_routers and the private _parent_router.
     # Using the public setter raises "Router is already attached".
-    for r in (forced_membership_router, router):
+    for r in (forced_membership_router, router, emoji_router, nouya_router):
         if r._parent_router is not None:
             parent = r._parent_router
             if hasattr(parent, "sub_routers") and r in parent.sub_routers:
@@ -1668,6 +1702,8 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
 
     dispatcher.include_router(forced_membership_router)
     dispatcher.include_router(router)
+    dispatcher.include_router(emoji_router)
+    dispatcher.include_router(nouya_router)
     return dispatcher
 
 
