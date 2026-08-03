@@ -108,6 +108,17 @@ MEMORY_LATENCY_LOGGING_ENABLED = os.getenv("MEMORY_LATENCY_LOGGING_ENABLED", "fa
 
 NOYA_SYSTEM_PROMPT_ENABLED = os.getenv("NOYA_SYSTEM_PROMPT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
+# --- Admin agent (natural-language admin assistant) --------------------------
+_TRUE = {"1", "true", "yes", "on"}
+AGENT_ENABLED = os.getenv("AGENT_ENABLED", "true").lower() in _TRUE
+AGENT_AI_ENABLED = os.getenv("AGENT_AI_ENABLED", "true").lower() in _TRUE
+AGENT_MODEL = os.getenv("AGENT_MODEL", "").strip()
+AGENT_CONFIRMATION_TTL_SECONDS = int(os.getenv("AGENT_CONFIRMATION_TTL_SECONDS", "120"))
+AGENT_MIN_CONFIDENCE = float(os.getenv("AGENT_MIN_CONFIDENCE", "0.80"))
+AGENT_MAX_COMMAND_LENGTH = int(os.getenv("AGENT_MAX_COMMAND_LENGTH", "2000"))
+MESSAGE_ARCHIVE_ENABLED = os.getenv("MESSAGE_ARCHIVE_ENABLED", "false").lower() in _TRUE
+MESSAGE_ARCHIVE_RETENTION_DAYS = int(os.getenv("MESSAGE_ARCHIVE_RETENTION_DAYS", "30"))
+
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True
