@@ -108,26 +108,35 @@ def parse(command: str) -> AgentDecision | None:  # noqa: C901 - flat rule table
     raw = (command or "").strip()
     if not raw:
         return None
-    text = normalize_digits(raw).casefold()
+    # Remove ZWNJ (نیم‌فاصله) and collapse spaces so keyword matching is robust.
+    text = " ".join(normalize_digits(raw).replace("\u200c", "").casefold().split())
+
+    status_query = ("چطور", "وضعیت", "الان", "چیه", "ببین", "نشون")
+    has_enable = _has_any(text, *_ENABLE)
+    has_disable = _has_any(text, *_DISABLE)
 
     # --- Read-only: group info ------------------------------------------------
-    if _has_any(text, "چند ادمین", "چندتا ادمین", "تعداد ادمین", "چند تا ادمین", "لیست ادمین", "ادمین‌ها", "ادمین ها"):
+    if _has_any(text, "چند ادمین", "چندتا ادمین", "تعداد ادمین", "چند تا ادمین", "لیست ادمین", "ادمینها", "ادمین ها"):
         return _decision("group.get_admins", {}, intent="get_admins", summary="نمایش ادمین‌ها")
     if _has_any(text, "تعداد اعضا", "چند عضو", "چندتا عضو", "چند تا عضو", "چند نفر", "اعضای گروه", "چند عضوی"):
         return _decision("group.get_member_count", {}, intent="get_member_count", summary="نمایش تعداد اعضا")
-    if _has_any(text, "دسترسی خودت", "دسترسی ربات", "دسترسی‌های ربات", "دسترسی های ربات", "دسترسی هات", "پرمیشن"):
+    if "دسترسی" in text and _has_any(text, "خودت", "ربات", "هات", "بات", "پرمیشن"):
         return _decision("group.get_bot_permissions", {}, intent="get_bot_permissions", summary="نمایش دسترسی‌های ربات")
-    if _has_any(text, "وضعیت ضداسپم", "ضداسپم چطور", "ضد اسپم چطور", "وضعیت مدیریت", "وضعیت moderation"):
+    if (
+        _has_any(text, "ضداسپم", "ضد اسپم", "ضدلینک", "ضد لینک", "ضدفوروارد", "مدیریت")
+        and _has_any(text, *status_query)
+        and not (has_enable or has_disable)
+    ):
         return _decision("group.get_moderation_status", {}, intent="get_moderation_status", summary="نمایش وضعیت مدیریت")
-    if _has_any(text, "تنظیمات گروه", "تنظیمات چطور", "تنظیمات الان", "نمایش تنظیمات") or text.strip() == "تنظیمات":
+    if "تنظیمات" in text:
         return _decision("group.get_settings", {}, intent="get_settings", summary="نمایش تنظیمات گروه")
 
     # --- Read-only: analytics / audit ----------------------------------------
     if _has_any(text, "آمار امروز", "آمار فعالیت امروز", "فعالیت امروز", "آمار روز"):
         return _decision("analytics.get_today_summary", {}, intent="today_summary", summary="آمار امروز")
-    if _has_any(text, "آخرین پیام حذف", "پیام حذف‌شده", "پیام حذف شده", "پیامی که ربات حذف", "پیام‌های حذف"):
+    if "حذف" in text and _has_any(text, "ربات", "بات") and _has_any(text, "آخرین", "کرده", "چی", "کدوم", "لیست"):
         return _decision("message.get_bot_deleted_recent", {}, intent="bot_deleted_recent", summary="آخرین پیام‌های حذف‌شده توسط ربات")
-    if _has_any(text, "آخرین عملیات", "آخرین اقدام", "تاریخچه عملیات", "گزارش عملیات", "لاگ عملیات"):
+    if _has_any(text, "آخرین عملیات", "آخرین اقدام", "تاریخچه عملیات", "گزارش عملیات", "لاگ عملیات", "آخرین عملیات مدیریتی"):
         return _decision("audit.get_recent_actions", {}, intent="recent_actions", summary="آخرین عملیات مدیریتی")
 
     # --- Member warnings (read) ----------------------------------------------

@@ -180,6 +180,9 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
 
         raw_params = decision.parameters.model_dump()
         raw_params = _resolve_target(tool, ctx, raw_params)
+        # Drop unset (None) values so each tool's strict schema applies its own
+        # defaults instead of receiving nulls it does not accept.
+        raw_params = {key: value for key, value in raw_params.items() if value is not None}
         validated = tool.validate_params(raw_params)
 
         ensure_admin_permission(ctx.admin, tool.permission)

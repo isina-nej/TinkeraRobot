@@ -191,3 +191,54 @@ cp .env.example .env
   - متن Prompt در دیتابیس (حافظه)، لاگ‌های عمومی یا متن پیام‌های فورواردشده ذخیره نمی‌شود.
   - با استفاده از فلگ متغیرمحیطی `NOYA_SYSTEM_PROMPT_ENABLED=false` می‌توان در زمان دیباگ یا رول‌بک آن را غیرفعال کرد.
 
+## ۷. دستیار مدیریتی هوشمند (Agent)
+
+ادمین می‌تواند با زبان طبیعی فارسی به ربات دستور مدیریتی بدهد. این قابلیت به‌صورت افزودنی روی معماری فعلی ساخته شده و همه‌ی فرمان‌ها و رفتارهای قبلی دست‌نخورده‌اند.
+
+### تریگرها
+
+```text
+/agent <دستور>
+/adminai <دستور>
+نویا، <دستور مدیریتی>
+```
+
+فرمان‌های قطعی موجود (mute، ban، حذف، قفل و…) و فرمان‌های بدون اسلش همان‌طور که بودند کار می‌کنند. تریگر «نویا،» فقط برای ادمین و فقط وقتی که یک Intent مدیریتی مطمئن تشخیص داده شود فعال می‌شود؛ در غیر این‌صورت پیام به گفت‌وگوی عادی نویا می‌رود و `/prompt` بدون تغییر باقی می‌ماند.
+
+### جریان اجرا
+
+`Trigger → Admin Verification → Deterministic Parser → (AI Structured Parser) → Schema Validation → Registry Lookup → App Permission → Bot Capability → Target Resolution → Risk → Confirmation → Existing-Service Execution → Audit → Persian Response`
+
+- ابتدا یک Parser قطعی و کم‌هزینه فارسی اجرا می‌شود؛ فقط اگر نتیجه نداد و `AGENT_AI_ENABLED=true` باشد، درخواست برای مدل ارسال می‌شود.
+- مدل AI فقط یک `AgentDecision` معتبر و allowlist‌شده تولید می‌کند؛ هرگز مستقیماً عملیات تلگرام یا دیتابیس انجام نمی‌دهد.
+- عملیات state‌دار مدیریتی از همان Pipeline موجود (`queue_or_execute` → `ModerationAction`) استفاده می‌کنند.
+- کاربر هدف فقط از Reply تعیین می‌شود؛ مدل اجازه‌ی ساختن `user_id` را ندارد.
+- محتوای Reply/نقل‌قول به‌عنوان `<untrusted_message>` (داده، نه دستور) به مدل داده می‌شود.
+
+### تأیید عملیات حساس
+
+عملیات پرخطر (ban، mute، قفل، حذف، تغییر تنظیمات امنیتی) پیش از اجرا یک پیام تأیید با دکمه‌های «✅ تأیید / ❌ لغو» نمایش می‌دهند. فقط درخواست‌دهنده، در همان گروه، و تا قبل از انقضا (پیش‌فرض ۱۲۰ ثانیه) می‌تواند تأیید کند. Tool Registry منبع نهایی سطح ریسک است؛ اگر مدل ریسک کمتری اعلام کند، مقدار Registry اعمال می‌شود. Token تأیید فقط به‌صورت hash ذخیره می‌شود.
+
+### آرشیو پیام (اختیاری)
+
+با `MESSAGE_ARCHIVE_ENABLED=true` ربات پیام‌های دریافتی گروه را آرشیو می‌کند و حذف‌هایی را که خودش انجام می‌دهد ثبت می‌کند. مطابق محدودیت واقعی Telegram، حذف دستی کاربران در گروه‌های عادی برای ربات قابل مشاهده نیست و ربات چنین ادعایی نمی‌کند. پاک‌سازی دوره‌ای:
+
+```bash
+.venv/bin/python manage.py purge_message_snapshots
+```
+
+### متغیرهای محیطی
+
+```text
+AGENT_ENABLED=true
+AGENT_AI_ENABLED=true
+AGENT_MODEL=
+AGENT_CONFIRMATION_TTL_SECONDS=120
+AGENT_MIN_CONFIDENCE=0.80
+AGENT_MAX_COMMAND_LENGTH=2000
+MESSAGE_ARCHIVE_ENABLED=false
+MESSAGE_ARCHIVE_RETENTION_DAYS=30
+```
+
+مدل‌های جدید `AgentConfirmation`، `AgentAuditLog` و `MessageSnapshot` در پنل Django قابل مشاهده‌اند. برای Rollback بدون تغییر کد کافی است `AGENT_ENABLED=false` تنظیم شود.
+

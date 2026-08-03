@@ -93,8 +93,9 @@ def reply_target_from_message(message) -> ReplyTarget | None:
     if not replied:
         return None
     user = getattr(replied, "from_user", None)
+    user_id = getattr(user, "id", None) if user else None
     return ReplyTarget(
-        user_id=int(user.id) if user else None,
+        user_id=int(user_id) if user_id is not None else None,
         is_bot=bool(getattr(user, "is_bot", False)) if user else False,
         full_name=getattr(user, "full_name", "") or "",
         username=getattr(user, "username", "") or "",

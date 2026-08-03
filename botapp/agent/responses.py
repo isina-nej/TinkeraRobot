@@ -6,12 +6,12 @@ PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
 
 def fa_number(value: int | float) -> str:
-    """Render an integer with Persian digits and thousands separators."""
+    """Render an integer with Persian digits and the Persian thousands mark."""
     try:
         text = f"{int(value):,}"
     except (TypeError, ValueError):
         text = str(value)
-    return text.translate(PERSIAN_DIGITS)
+    return text.translate(PERSIAN_DIGITS).replace(",", "٬")
 
 
 def fa_duration(minutes: int | None) -> str:
