@@ -323,6 +323,7 @@ class AgentConfirmationAdmin(admin.ModelAdmin):
         "tool_name",
         "risk_level",
         "status",
+        "executing_started_at",
         "expires_at",
         "created_at",
     )

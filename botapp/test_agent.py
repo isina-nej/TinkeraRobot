@@ -1,10 +1,17 @@
 """Tests for the admin agent: unit, integration, regression and security."""
 
 from types import SimpleNamespace
+from unittest import skipUnless
 
 from aiogram.enums import ChatMemberStatus
 from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.db import connection
+from django.test import (
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.utils import timezone
 
 from botapp import message_archive
@@ -18,7 +25,7 @@ from botapp.agent.errors import (
     ConfirmationExpired,
     UnknownTool,
 )
-from botapp.agent.orchestrator import handle_admin_command
+from botapp.agent.orchestrator import execute_confirmed, handle_admin_command
 from botapp.agent.parser import extract_int, normalize_digits, parse, parse_duration_minutes
 from botapp.agent.permissions import (
     ADMINISTRATOR,
@@ -253,6 +260,56 @@ class ParserUnitTests(SimpleTestCase):
 # --- Unit: risk / registry / permissions / schemas --------------------------
 
 
+class ToolRegistryIntegrityTests(SimpleTestCase):
+    """Every registered (active) tool must be real and safe to expose."""
+
+    def test_all_tools_have_real_handlers_and_schemas(self):
+        import inspect
+
+        from pydantic import BaseModel
+
+        from botapp.agent import permissions as perm
+        from botapp.agent.risk import RISK_ORDER
+
+        valid_permissions = set(perm.PERMISSION_MIN_ROLE)
+        valid_caps = {None, perm.CAP_RESTRICT, perm.CAP_DELETE, perm.CAP_PIN}
+        valid_targets = {"none", "member", "message"}
+
+        tools = registry.all()
+        self.assertGreaterEqual(len(tools), 1)
+        for tool in tools:
+            with self.subTest(tool=tool.name):
+                # Real async handler (not a placeholder / not None).
+                self.assertTrue(callable(tool.handler))
+                self.assertTrue(
+                    inspect.iscoroutinefunction(tool.handler),
+                    f"{tool.name} handler must be async",
+                )
+                # Valid strict Pydantic schema.
+                self.assertTrue(issubclass(tool.input_schema, BaseModel))
+                # Known policy metadata.
+                self.assertIn(tool.permission, valid_permissions, tool.name)
+                self.assertIn(tool.risk_level, RISK_ORDER, tool.name)
+                self.assertIn(tool.capability, valid_caps, tool.name)
+                self.assertIn(tool.target_kind, valid_targets, tool.name)
+
+    def test_ai_catalog_only_lists_selectable_tools(self):
+        catalog_names = {entry["tool"] for entry in registry.ai_catalog()}
+        for tool in registry.all():
+            if tool.ai_selectable:
+                self.assertIn(tool.name, catalog_names)
+            else:
+                self.assertNotIn(tool.name, catalog_names)
+
+    def test_high_risk_tools_require_confirmation(self):
+        for tool in registry.all():
+            if tool.risk_level == "high":
+                self.assertTrue(
+                    tool.requires_confirmation,
+                    f"high-risk tool {tool.name} must require confirmation",
+                )
+
+
 class PolicyUnitTests(SimpleTestCase):
     def test_registry_risk_override(self):
         # AI says low, registry says high -> high wins.
@@ -391,6 +448,193 @@ class ConfirmationLifecycleTests(TestCase):
         confirmation.expires_at = timezone.now() - timezone.timedelta(minutes=5)
         confirmation.save(update_fields=["expires_at"])
         self.assertEqual(confirmations.expire_stale(), 1)
+
+
+class ConfirmationSecurityTests(TestCase):
+    """Recovery policy + confirm-time re-checks (item 4)."""
+
+    CHAT = -1001
+
+    def setUp(self):
+        clear_role_cache()
+        GroupSettings.objects.get_or_create(chat_id=self.CHAT)
+
+    def _claimed(self, *, tool="member.mute", params=None, requester=42):
+        conf, raw = confirmations.create_confirmation(
+            chat_id=self.CHAT,
+            requester_user_id=requester,
+            requester_name="Admin",
+            tool_name=tool,
+            validated_parameters=params or {"target_user_id": 7, "duration_minutes": 5, "delay_minutes": 0, "reason": ""},
+            human_summary="x",
+            risk_level="high",
+            target_user_id=7,
+        )
+        return confirmations.claim_for_execution(raw, requester_user_id=requester, chat_id=self.CHAT), raw
+
+    def test_confirm_then_cancel_is_rejected(self):
+        conf, raw = self._claimed()  # now executing
+        with self.assertRaises(ConfirmationAlreadyHandled):
+            confirmations.cancel_confirmation(raw, requester_user_id=42, chat_id=self.CHAT)
+
+    def test_stuck_executing_detected_and_failed_without_reexec(self):
+        conf, _ = self._claimed()
+        conf.executing_started_at = timezone.now() - timezone.timedelta(minutes=30)
+        conf.save(update_fields=["executing_started_at"])
+        self.assertEqual(confirmations.find_stuck_executing(5).count(), 1)
+        failed = confirmations.fail_stuck_executing(5)
+        self.assertEqual(failed, 1)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+        self.assertEqual(conf.error_code, "stuck_executing_recovered")
+        # No moderation action was created (nothing was re-run).
+        self.assertEqual(ModerationAction.objects.count(), 0)
+
+    def test_confirm_after_admin_demoted_fails(self):
+        conf, _ = self._claimed()
+        # Bot now sees the requester as a plain member (demoted).
+        bot = FakeBot(members={42: _member(ChatMemberStatus.MEMBER), 1000: _member(ChatMemberStatus.ADMINISTRATOR, can_restrict_members=True)})
+        text = async_to_sync(execute_confirmed)(bot, conf)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+        self.assertFalse(bot.restricted)
+        self.assertIn("مدیران", text)
+
+    def test_confirm_after_bot_permission_removed_fails(self):
+        conf, _ = self._claimed()
+        bot = admin_bot(42, target_id=7, bot_admin=False)
+        text = async_to_sync(execute_confirmed)(bot, conf)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+        self.assertFalse(bot.restricted)
+
+    def test_confirm_after_tool_removed_from_registry_fails(self):
+        conf, _ = self._claimed(tool="member.__removed__")
+        bot = admin_bot(42, target_id=7)
+        text = async_to_sync(execute_confirmed)(bot, conf)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+
+    def test_telegram_exception_during_execution_marks_failed(self):
+        class RaisingBot(FakeBot):
+            async def restrict_chat_member(self, *a, **k):
+                raise RuntimeError("telegram down")
+
+        conf, _ = self._claimed()
+        bot = RaisingBot(members={
+            42: _member(ChatMemberStatus.ADMINISTRATOR, can_promote_members=True, can_restrict_members=True),
+            1000: _member(ChatMemberStatus.ADMINISTRATOR, can_restrict_members=True),
+            7: _member(ChatMemberStatus.MEMBER),
+        })
+        text = async_to_sync(execute_confirmed)(bot, conf)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+        self.assertIn("ناموفق", text)
+
+
+@skipUnless(
+    connection.vendor != "sqlite",
+    "SQLite serialises writes and does not honour SELECT FOR UPDATE across "
+    "connections; run on MySQL/Postgres to exercise real row-lock concurrency.",
+)
+class ConcurrentConfirmationTests(TransactionTestCase):
+    """Real concurrent double-click test (skipped on SQLite; see CI notes)."""
+
+    def test_concurrent_double_click_executes_once(self):
+        import threading
+
+        GroupSettings.objects.get_or_create(chat_id=-2002)
+        conf, raw = confirmations.create_confirmation(
+            chat_id=-2002,
+            requester_user_id=42,
+            requester_name="A",
+            tool_name="member.ban",
+            validated_parameters={"target_user_id": 7},
+            human_summary="بن",
+            risk_level="high",
+            target_user_id=7,
+        )
+        results = []
+
+        def worker():
+            try:
+                confirmations.claim_for_execution(raw, requester_user_id=42, chat_id=-2002)
+                results.append("claimed")
+            except Exception:
+                results.append("rejected")
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(results.count("claimed"), 1)
+        self.assertEqual(results.count("rejected"), 1)
+
+
+class TokenSecurityTests(TestCase):
+    def _create(self):
+        return confirmations.create_confirmation(
+            chat_id=-1001,
+            requester_user_id=42,
+            requester_name="Admin",
+            tool_name="member.ban",
+            validated_parameters={"target_user_id": 7},
+            human_summary="بن",
+            risk_level="high",
+            target_user_id=7,
+        )
+
+    def test_callback_data_within_telegram_limit(self):
+        from botapp.agent_handlers import _confirmation_keyboard
+
+        raw = confirmations.generate_token()
+        keyboard = _confirmation_keyboard(raw)
+        buttons = keyboard.inline_keyboard[0]
+        for button in buttons:
+            self.assertLessEqual(len(button.callback_data.encode("utf-8")), 64)
+        # Both prefixes must round-trip back to the same raw token.
+        actions = {}
+        for button in buttons:
+            action, token = callbacks.parse_callback(button.callback_data)
+            actions[action] = token
+        self.assertEqual(actions["confirm"], raw)
+        self.assertEqual(actions["cancel"], raw)
+
+    def test_token_entropy_and_uniqueness(self):
+        tokens = {confirmations.generate_token() for _ in range(200)}
+        self.assertEqual(len(tokens), 200)  # no collisions
+        for token in tokens:
+            self.assertGreaterEqual(len(token), 32)  # >=128 bits of entropy
+
+    def test_raw_token_not_stored_on_model(self):
+        confirmation, raw = self._create()
+        confirmation.refresh_from_db()
+        serialized = " ".join(str(v) for v in confirmation.__dict__.values())
+        self.assertNotIn(raw, serialized)
+        self.assertEqual(confirmation.token_hash, confirmations.hash_token(raw))
+
+    def test_raw_token_not_in_audit_log(self):
+        # Run a full read-only command so an audit row is written, plus a
+        # confirmation flow, then assert the raw token never appears in audit.
+        clear_role_cache()
+        GroupSettings.objects.get_or_create(chat_id=-1001)
+        confirmation, raw = self._create()
+        bot = admin_bot(42)
+        async_to_sync(callbacks.process_cancel)(bot, raw, user_id=42, chat_id=-1001)
+        for row in AgentAuditLog.objects.all():
+            self.assertNotIn(raw, str(row.__dict__))
+
+    def test_tampered_token_rejected(self):
+        _, raw = self._create()
+        tampered = ("A" if raw[0] != "A" else "B") + raw[1:]
+        with self.assertRaises(ConfirmationAlreadyHandled):
+            confirmations.claim_for_execution(tampered, requester_user_id=42, chat_id=-1001)
+        # Original still valid.
+        claimed = confirmations.claim_for_execution(raw, requester_user_id=42, chat_id=-1001)
+        self.assertEqual(claimed.status, AgentConfirmation.STATUS_EXECUTING)
 
 
 # --- Integration: orchestrator ----------------------------------------------
@@ -620,6 +864,35 @@ class TriggerRegressionTests(TestCase):
         # Even an admin-looking command falls through for non-admins.
         bot = FakeBot(members={42: _member(ChatMemberStatus.MEMBER)})
         msg = make_message("نویا این کاربر رو بن کن", user_id=42)
+        matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
+        self.assertFalse(matched)
+
+    def test_admin_explicit_trigger_deterministic(self):
+        bot = admin_bot(42)
+        msg = make_message("نویا مدیر، تعداد اعضای گروه چقدره؟", user_id=42)
+        matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
+        self.assertTrue(bool(matched))
+        self.assertIn("تعداد اعضا", matched["agent_command"])
+
+    def test_admin_explicit_trigger_ai_needed_still_matches(self):
+        # An explicit "نویا مدیر،" command is routed to the agent even when the
+        # deterministic parser cannot classify it (so the AI parser can run).
+        bot = admin_bot(42)
+        msg = make_message("نویا مدیر، یه تصمیم درست درباره این وضعیت بگیر", user_id=42)
+        matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
+        self.assertTrue(bool(matched))
+
+    def test_non_admin_explicit_trigger_falls_through(self):
+        bot = FakeBot(members={42: _member(ChatMemberStatus.MEMBER)})
+        msg = make_message("نویا مدیر، این کاربر رو بن کن", user_id=42)
+        matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
+        self.assertFalse(matched)
+
+    def test_plain_trigger_ai_needed_falls_through_to_noya(self):
+        # Plain "نویا،" with a non-deterministic command must NOT be captured by
+        # the agent (preserves normal Noya chat), even for an admin.
+        bot = admin_bot(42)
+        msg = make_message("نویا، نظرت درباره این وضعیت پیچیده چیه؟", user_id=42)
         matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
         self.assertFalse(matched)
 

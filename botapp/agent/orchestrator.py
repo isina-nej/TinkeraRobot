@@ -13,12 +13,15 @@ allowlisted decision that this module then routes through existing services.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 
 from asgiref.sync import sync_to_async
 from django.conf import settings as dj_settings
+
+logger = logging.getLogger("botapp.agent")
 
 from botapp.models import AgentConfirmation
 
@@ -247,7 +250,10 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
     except AgentError as exc:
         await _audit(execution_status="failed", error_code=exc.code)
         return AgentResult(text=exc.user_message, error=True)
-    except Exception:  # defensive: never leak internals
+    except Exception:  # defensive: never leak internals to the user
+        # Log with a full stack trace + request_id for debugging; the user only
+        # ever sees a generic message and no technical detail is surfaced.
+        logger.exception("agent command failed request_id=%s chat=%s", request_id, chat_id)
         await _audit(execution_status="failed", error_code="unexpected_error")
         return AgentResult(text="❌ خطای غیرمنتظره‌ای رخ داد.", error=True)
 
@@ -260,7 +266,6 @@ async def execute_confirmed(bot, confirmation: AgentConfirmation) -> str:
     """
     started = time.perf_counter()
     request_id = uuid.uuid4().hex
-    tool = registry.get(confirmation.tool_name)
 
     async def _audit(status: str, error_code: str = "", executed: bool = False):
         await sync_to_async(record_audit, thread_sensitive=True)(
@@ -282,6 +287,10 @@ async def execute_confirmed(bot, confirmation: AgentConfirmation) -> str:
         )
 
     try:
+        # Look up the tool inside the try so a registry change (e.g. a tool
+        # removed between confirmation and execution) fails gracefully instead
+        # of leaving the row stuck.
+        tool = registry.get(confirmation.tool_name)
         identity = await resolve_admin_identity(
             bot,
             confirmation.chat_id,
@@ -313,6 +322,12 @@ async def execute_confirmed(bot, confirmation: AgentConfirmation) -> str:
         await _audit("failed", error_code=exc.code)
         return exc.user_message
     except Exception:
+        logger.exception(
+            "agent confirmation execution failed request_id=%s confirmation=%s tool=%s",
+            request_id,
+            confirmation.pk,
+            confirmation.tool_name,
+        )
         await sync_to_async(confirmations.mark_failed, thread_sensitive=True)(confirmation, "unexpected_error")
         await _audit("failed", error_code="unexpected_error")
         return "❌ اجرای عملیات ناموفق بود."

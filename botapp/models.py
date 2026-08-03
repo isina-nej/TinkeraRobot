@@ -824,6 +824,9 @@ class AgentConfirmation(models.Model):
     expires_at = models.DateTimeField(db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # Set when the row transitions to "executing"; used to detect records left
+    # stuck in "executing" if the process died mid-execution (recovery policy).
+    executing_started_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
     executed_at = models.DateTimeField(null=True, blank=True)
     result_summary = models.CharField(max_length=500, blank=True, default="")
