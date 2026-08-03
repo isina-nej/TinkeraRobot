@@ -257,3 +257,46 @@ MESSAGE_ARCHIVE_RETENTION_DAYS=30
 
 مدل‌های جدید `AgentConfirmation`، `AgentAuditLog` و `MessageSnapshot` در پنل Django قابل مشاهده‌اند. برای Rollback بدون تغییر کد کافی است `AGENT_ENABLED=false` تنظیم شود.
 
+### بازیابی عملیات‌های گیرکرده
+
+اگر یک Process پس از Claim‌شدن تأیید ولی پیش از پایان اجرا از کار بیفتد، رکورد ممکن است در وضعیت `executing` بماند. برای گزارش/بستن این رکوردها بدون اجرای مجدد عملیات خطرناک:
+
+```bash
+.venv/bin/python manage.py agent_confirmations_recover            # فقط گزارش
+.venv/bin/python manage.py agent_confirmations_recover --fail      # علامت‌گذاری به‌عنوان failed (بدون اجرای مجدد)
+```
+
+### تست زنده با ربات مستقل
+
+هرگز از توکن ربات production برای Polling استفاده نکنید. یک ربات آزمایشی جدا در BotFather بسازید و متغیرهای `TEST_BOT_TOKEN` (و اختیاری `TEST_GROUP_ID`، `TEST_ADMIN_USER_ID`) را تنظیم کنید، سپس:
+
+```bash
+.venv/bin/python manage.py run_testbot
+```
+
+این دستور فقط با `TEST_BOT_TOKEN` اجرا می‌شود و هرگز به `BOT_TOKEN` production بازنمی‌گردد؛ اگر متغیر تنظیم نشده باشد با خطای واضح متوقف می‌شود.
+
+### تست روی دیتابیس Production-like (MySQL)
+
+رفتار Lock هم‌زمان (`select_for_update`) در SQLite قابل اثبات نیست؛ تستِ `ConcurrentConfirmationTests` روی SQLite به‌صورت خودکار Skip می‌شود و فقط روی MySQL/Postgres اجرا می‌شود. برای اجرای کامل روی MySQL:
+
+```bash
+DB_ENGINE=django.db.backends.mysql DB_NAME=group_bot DB_USER=group_bot \
+  DB_PASSWORD=... DB_HOST=127.0.0.1 DB_PORT=3306 \
+  .venv/bin/python manage.py test
+```
+
+در CI پیش‌فرض (SQLite) این تست Skip می‌شود؛ برای پوشش کامل باید یک سرویس MySQL در CI اضافه شود.
+
+### هشدار امنیتی: توکن افشاشده
+
+اگر توکن ربات production در جایی مثل Chat، Log، Screenshot، Artifact یا محیط غیرمطمئن قرار گرفت، باید فوراً چرخانده (rotate) شود:
+
+1. در BotFather دستور `/revoke` را برای همان ربات اجرا کنید تا توکن قدیمی باطل شود.
+2. توکن جدید را فقط در یک Secret Manager (مثل بخش Secrets) قرار دهید، نه در کد/Chat/Log.
+3. سرویس production را با توکن جدید Restart کنید.
+4. توکن قدیمی را از تمام محیط‌های توسعه/CI حذف کنید.
+5. Logها و Artifactها را برای نشت احتمالی توکن بررسی کنید.
+
+هیچ توکن یا Secret نباید در Git، Log، Screenshot یا Artifact ذخیره شود.
+
