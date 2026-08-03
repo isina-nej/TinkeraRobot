@@ -207,7 +207,7 @@ async def call_noya_api(question: str, session_id: str) -> str:
         "messages": build_ai_messages(question),
     }
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=90.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
