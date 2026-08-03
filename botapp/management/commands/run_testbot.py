@@ -18,7 +18,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from botapp.bot_start_gate import notice_cleanup_loop
 from botapp.forced_membership_handlers import configure_super_admins
-from botapp.management.commands.runbot import build_dispatcher
+from botapp.management.commands.runbot import build_dispatcher, parse_bot_tokens
 
 
 class Command(BaseCommand):
@@ -31,6 +31,18 @@ class Command(BaseCommand):
                 "TEST_BOT_TOKEN is not set. run_testbot never falls back to the "
                 "production BOT_TOKEN. Create a SEPARATE bot in BotFather and set "
                 "TEST_BOT_TOKEN to its token before running live tests."
+            )
+
+        # Defense-in-depth: refuse to poll the PRODUCTION bot even under the test
+        # command. TEST_BOT_TOKEN must belong to a separate BotFather bot.
+        production_tokens = set(
+            parse_bot_tokens(os.getenv("BOT_TOKENS", ""), os.getenv("BOT_TOKEN", ""))
+        )
+        if token in production_tokens:
+            raise CommandError(
+                "TEST_BOT_TOKEN equals the production BOT_TOKEN/BOT_TOKENS. Refusing "
+                "to poll the production bot. Create a SEPARATE bot in BotFather and "
+                "use its token for TEST_BOT_TOKEN."
             )
 
         test_admin = os.getenv("TEST_ADMIN_USER_ID", "").strip()

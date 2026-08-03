@@ -1,5 +1,6 @@
 """Tests for the admin agent: unit, integration, regression and security."""
 
+import os
 from types import SimpleNamespace
 from unittest import skipUnless
 
@@ -572,6 +573,31 @@ class ConcurrentConfirmationTests(TransactionTestCase):
             t.join()
         self.assertEqual(results.count("claimed"), 1)
         self.assertEqual(results.count("rejected"), 1)
+
+
+class RunTestbotGuardTests(SimpleTestCase):
+    """run_testbot must never poll production, even by mistake."""
+
+    def test_missing_test_token_errors(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        with mock.patch.dict(os.environ, {"TEST_BOT_TOKEN": "", "BOT_TOKEN": "111:prod"}, clear=False):
+            with self.assertRaises(CommandError):
+                call_command("run_testbot")
+
+    def test_test_token_equal_to_production_is_refused(self):
+        from unittest import mock
+
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        env = {"TEST_BOT_TOKEN": "12345:SAME", "BOT_TOKEN": "12345:SAME"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            with self.assertRaises(CommandError):
+                call_command("run_testbot")
 
 
 class TokenSecurityTests(TestCase):
