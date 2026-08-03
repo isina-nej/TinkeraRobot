@@ -34,6 +34,14 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   from BotFather; with a placeholder/empty value aiogram raises `TokenValidationError`.
   Provide the token as the `BOT_TOKEN` secret to exercise live Telegram polling. The
   moderation backend and REST API do not need it.
+- IMPORTANT: the provided `BOT_TOKEN` secret belongs to the LIVE production bot
+  (`@NuyaRobot`). Telegram allows only one `getUpdates` poller per token, so running
+  `manage.py runbot` here raises `TelegramConflictError` ("terminated by other getUpdates
+  request") and would steal updates from production. Do NOT run live long-polling against
+  the production token. To validate the bot safely, either use `bot.get_me()` /
+  non-polling Bot API calls, or use a SEPARATE test-bot token from BotFather. `runbot`
+  reaching the polling loop (even with the conflict error) already confirms the token,
+  dispatcher and handler wiring are valid.
 - Moderation REST API auth: send header `X-API-Key: <key>` (create a key with
   `manage.py create_api_key <name> --username <user>`; the plaintext is shown only once and
   stored hashed) OR a logged-in staff session + CSRF token.
