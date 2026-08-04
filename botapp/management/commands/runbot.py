@@ -1652,7 +1652,7 @@ class MultiBotGroupDeduplicationMiddleware(BaseMiddleware):
             return None
         if isinstance(event, Message):
             text = event.text or ""
-            target = re.search(r"(?:^/[^\s@]+|@)([A-Za-z0-9_]{5,})\b", text)
+            target = re.search(r"@([A-Za-z0-9_]{5,})\b", text)
             if target and target.group(1).casefold() in self.bot_usernames:
                 username = (await data["bot"].me()).username or ""
                 if target.group(1).casefold() != username.casefold():

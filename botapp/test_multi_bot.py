@@ -78,6 +78,23 @@ class MultiBotTests(SimpleTestCase):
         assert handled == "handled"
         handler.assert_awaited_once()
 
+    def test_slash_command_targeting_a_long_bot_username_is_recognized(self):
+        middleware = MultiBotGroupDeduplicationMiddleware(("first_bot", "second_bot"))
+        handler = AsyncMock(return_value="handled")
+        message = self.message(text="/delete@second_bot 100")
+        update = SimpleNamespace(edited_message=None)
+        first_bot = AsyncMock()
+        first_bot.me.return_value = SimpleNamespace(username="first_bot")
+        second_bot = AsyncMock()
+        second_bot.me.return_value = SimpleNamespace(username="second_bot")
+
+        skipped = async_to_sync(middleware)(handler, message, {"event_update": update, "bot": first_bot})
+        handled = async_to_sync(middleware)(handler, message, {"event_update": update, "bot": second_bot})
+
+        assert skipped is None
+        assert handled == "handled"
+        handler.assert_awaited_once()
+
     def test_normal_user_mention_is_not_dropped(self):
         middleware = MultiBotGroupDeduplicationMiddleware(("first_bot", "second_bot"))
         handler = AsyncMock(return_value="handled")
