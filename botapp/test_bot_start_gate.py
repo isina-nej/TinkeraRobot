@@ -369,6 +369,26 @@ class BotStartGateRuntimeTest(TestCase):
         pass  # This was causing issues, functionality is tested elsewhere
         message.answer.assert_awaited_with("سلام ✨ من نویا هستم، دختر سینا. می‌تونید با پدر من [در این کانال](https://t.me/CoffeeMan_nej) حرف بزنید.", parse_mode="HTML")
 
+    def test_valid_signed_deep_link_still_replies_with_the_welcome_text(self):
+        from aiogram.filters import CommandObject
+        from botapp.bot_start_gate import deep_link_payload
+        from botapp.management.commands.runbot import send_welcome
+
+        token = deep_link_payload(-100123, 42)
+        message = SimpleNamespace(
+            chat=SimpleNamespace(type="private"),
+            from_user=self.user,
+            answer=AsyncMock(),
+        )
+        bot = AsyncMock()
+        command = CommandObject(command="start", args=token)
+
+        async_to_sync(send_welcome)(message, bot, command)
+
+        user = TelegramUser.objects.get(telegram_user_id=42)
+        assert user.started is True
+        message.answer.assert_awaited_once()
+
     def test_dispatcher_factory_installs_both_outer_middlewares(self):
         from botapp.bot_start_gate import BotStartGateMiddleware
         from botapp.forced_membership_handlers import router as forced_router

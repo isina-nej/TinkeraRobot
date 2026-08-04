@@ -563,17 +563,15 @@ async def send_welcome(message: Message, bot: Bot, command: CommandObject | None
 
     deep_link_payload = command.args if command else ""
     if deep_link_payload:
-        payload = parse_deep_link_payload(
+        group_id = parse_deep_link_payload(
             deep_link_payload, current_user_id=user.id
         )
-        if payload:
-            payload_type, _ = payload
-            if payload_type == "start":
-                await mark_user_started(user.id)
-                settings = await get_message_settings()
-                text = await render_text_with_custom_emojis(settings["start_message"])
-                await message.answer(text, parse_mode="HTML")
-                return
+        if group_id is not None:
+            await mark_user_started(user.id)
+            settings = await get_message_settings()
+            text = await render_text_with_custom_emojis(settings["start_message"])
+            await message.answer(text, parse_mode="HTML")
+            return
 
     settings = await get_message_settings()
     text = await render_text_with_custom_emojis(settings["start_message"])
