@@ -46,7 +46,14 @@ async def is_chat_admin(bot, chat_id, user_id):
 async def execute_telegram_action(bot, action: ModerationAction):
     if action.action == "lock":
         chat = await bot.get_chat(action.group.chat_id)
-        await save_open_permissions(action.group, chat.permissions or OPEN_PERMISSIONS)
+        current = chat.permissions or OPEN_PERMISSIONS
+        # Only snapshot the pre-lock permissions when the group is currently
+        # OPEN. Locking an already-locked group (e.g. a second /lock or a daily
+        # lock while already locked) must not overwrite the good snapshot with
+        # the locked state — otherwise unlock would restore the locked
+        # permissions and mute the group permanently.
+        if getattr(current, "can_send_messages", None) is not False:
+            await save_open_permissions(action.group, current)
         return await bot.set_chat_permissions(action.group.chat_id, LOCKED_GROUP_PERMISSIONS)
     if action.action == "unlock":
         permissions = (
