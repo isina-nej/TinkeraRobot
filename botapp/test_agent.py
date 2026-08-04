@@ -762,6 +762,19 @@ class OrchestratorIntegrationTests(TestCase):
         self.assertFalse(result.error)
         self.assertTrue(GroupSettings.objects.get(chat_id=self.chat_id).anti_link_enabled)
 
+    def test_free_text_setting_requires_confirmation_and_shows_value(self):
+        bot = admin_bot(42)
+        msg = make_message("x", user_id=42)
+        result = self.run_cmd(bot, msg, "کلمه ممنوع تبلیغ رو اضافه کن")
+        self.assertTrue(result.needs_confirmation)
+        self.assertIn("تبلیغ", result.text)  # exact value shown in the preview
+        # Not applied until confirmed.
+        self.assertNotIn("تبلیغ", GroupSettings.objects.get(chat_id=self.chat_id).blocked_words)
+        async_to_sync(callbacks.process_confirm)(
+            bot, result.confirm_token, user_id=42, chat_id=self.chat_id
+        )
+        self.assertIn("تبلیغ", GroupSettings.objects.get(chat_id=self.chat_id).blocked_words)
+
     def test_audit_log_written(self):
         bot = admin_bot(42)
         msg = make_message("تعداد اعضا", user_id=42)

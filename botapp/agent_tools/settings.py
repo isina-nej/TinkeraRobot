@@ -113,7 +113,9 @@ register_tool(
     input_schema=IntValueParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    # Free-text/numeric value is not reply-bound, so require an explicit
+    # confirmation of the exact value (defends against injected/ambiguous input).
+    requires_confirmation=True,
     handler=set_flood_limit,
     human_verb="تنظیم محدودیت پیام",
 )
@@ -123,7 +125,7 @@ register_tool(
     input_schema=IntValueParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    requires_confirmation=True,
     handler=set_max_warnings,
     human_verb="تنظیم سقف اخطار",
 )
@@ -142,7 +144,7 @@ register_tool(
     input_schema=WordParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    requires_confirmation=True,
     handler=_mutate_list_tool("blocked_words", "کلمات ممنوع", add=True),
     human_verb="افزودن کلمه ممنوع",
 )
@@ -152,7 +154,7 @@ register_tool(
     input_schema=WordParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    requires_confirmation=True,
     handler=_mutate_list_tool("blocked_words", "کلمات ممنوع", add=False),
     human_verb="حذف کلمه ممنوع",
 )
@@ -171,7 +173,7 @@ register_tool(
     input_schema=WordParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    requires_confirmation=True,
     handler=_mutate_list_tool("allowed_domains", "دامنه‌های مجاز", add=True),
     human_verb="افزودن دامنه مجاز",
 )
@@ -181,7 +183,7 @@ register_tool(
     input_schema=WordParams,
     permission=SETTINGS_WRITE,
     risk_level=MEDIUM,
-    requires_confirmation=False,
+    requires_confirmation=True,
     handler=_mutate_list_tool("allowed_domains", "دامنه‌های مجاز", add=False),
     human_verb="حذف دامنه مجاز",
 )

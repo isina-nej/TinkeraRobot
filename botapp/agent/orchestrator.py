@@ -217,6 +217,7 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
                 duration_minutes=validated.model_dump().get("duration_minutes"),
                 delay_minutes=validated.model_dump().get("delay_minutes", 0) or 0,
                 reason=validated.model_dump().get("reason", "") or "",
+                value=validated.model_dump().get("value"),
                 requester_name=ctx.admin.display_name,
                 group_name=ctx.chat_title,
                 risk_level=risk,
