@@ -95,6 +95,23 @@ class MultiBotTests(SimpleTestCase):
         assert handled == "handled"
         handler.assert_awaited_once()
 
+    def test_emoji_router_precedes_main_router(self):
+        # The main router ends with an unfiltered catch-all that would otherwise
+        # consume /add_emoji and /set_welcome_emoji, so emoji_router must be
+        # dispatched before the main router.
+        from botapp.emoji_handlers import router as emoji_router
+        from botapp.management.commands.runbot import build_dispatcher, router as main_router
+
+        dispatcher = build_dispatcher()
+        names = dispatcher.sub_routers
+        self.assertIn(emoji_router, names)
+        self.assertIn(main_router, names)
+        self.assertLess(
+            names.index(emoji_router),
+            names.index(main_router),
+            "emoji_router must be included before the main router",
+        )
+
     def test_normal_user_mention_is_not_dropped(self):
         middleware = MultiBotGroupDeduplicationMiddleware(("first_bot", "second_bot"))
         handler = AsyncMock(return_value="handled")

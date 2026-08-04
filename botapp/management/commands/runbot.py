@@ -1710,7 +1710,13 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
     # Using the public setter raises "Router is already attached".
     # NOTE: agent_router is included BEFORE the main router so /agent, /adminai
     # and the strict "نویا،" trigger are matched before the catch-all handlers.
-    for r in (agent_router, forced_membership_router, router, emoji_router, nouya_router):
+    # emoji_router must ALSO precede the main router: the main router ends with an
+    # unfiltered @router.message() catch-all (check_message) that otherwise
+    # consumes /add_emoji and /set_welcome_emoji before emoji_router ever runs.
+    # emoji_router only matches those two exact commands, so it cannot shadow any
+    # main-router handler. nouya_router stays last (its channel_post/guest_message
+    # handlers are separate event types and are unaffected by message ordering).
+    for r in (agent_router, forced_membership_router, emoji_router, router, nouya_router):
         if r._parent_router is not None:
             parent = r._parent_router
             if hasattr(parent, "sub_routers") and r in parent.sub_routers:
@@ -1719,8 +1725,8 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
 
     dispatcher.include_router(agent_router)
     dispatcher.include_router(forced_membership_router)
-    dispatcher.include_router(router)
     dispatcher.include_router(emoji_router)
+    dispatcher.include_router(router)
     dispatcher.include_router(nouya_router)
     return dispatcher
 
