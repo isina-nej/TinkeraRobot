@@ -82,7 +82,7 @@ def _is_exempt_message(message: Message) -> bool:
     return bool(
         not user
         or user.is_bot
-        or message.sender_chat
+        or (message.sender_chat is not None and message.sender_chat.id == message.chat.id)
         or message.new_chat_members
         or message.left_chat_member
         or message.pinned_message

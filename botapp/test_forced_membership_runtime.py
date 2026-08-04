@@ -22,6 +22,29 @@ class ForcedMembershipPermissionTest(SimpleTestCase):
         assert can_manage_rule("administrator", "administrator", False) is False
 
 
+class ForcedMembershipExemptionTest(SimpleTestCase):
+    @staticmethod
+    def message(*, sender_chat=None):
+        user = SimpleNamespace(id=42, is_bot=False)
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=-1001, type="supergroup"),
+            from_user=user,
+            sender_chat=sender_chat,
+            new_chat_members=None,
+            left_chat_member=None,
+            pinned_message=None,
+        )
+
+    def test_only_same_chat_sender_chat_is_exempt(self):
+        from botapp.forced_membership_runtime import _is_exempt_message
+
+        anonymous_admin = self.message(sender_chat=SimpleNamespace(id=-1001))
+        external_channel = self.message(sender_chat=SimpleNamespace(id=-2001))
+
+        assert _is_exempt_message(anonymous_admin) is True
+        assert _is_exempt_message(external_channel) is False
+
+
 class ForcedMembershipRuntimeTest(TestCase):
     def setUp(self):
         self.group = GroupSettings.objects.create(chat_id=-1001, chat_title="source")
