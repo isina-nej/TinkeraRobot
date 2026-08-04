@@ -516,6 +516,19 @@ class ConfirmationSecurityTests(TestCase):
         conf.refresh_from_db()
         self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
 
+    def test_warn_backstop_protects_admin_at_confirm_time(self):
+        from botapp.models import Warning
+
+        conf, _ = self._claimed(
+            tool="member.warn", params={"target_user_id": 7, "reason": "x"}
+        )
+        # Target is a group admin -> warn handler must refuse even at confirm time.
+        bot = admin_bot(42, target_id=7, target_admin=True)
+        text = async_to_sync(execute_confirmed)(bot, conf)
+        conf.refresh_from_db()
+        self.assertEqual(conf.status, AgentConfirmation.STATUS_FAILED)
+        self.assertEqual(Warning.objects.count(), 0)
+
     def test_telegram_exception_during_execution_marks_failed(self):
         class RaisingBot(FakeBot):
             async def restrict_chat_member(self, *a, **k):
