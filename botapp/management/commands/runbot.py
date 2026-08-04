@@ -1696,6 +1696,7 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
     dispatcher.edited_message.outer_middleware(deduplication)
     dispatcher.chat_member.outer_middleware(deduplication)
     dispatcher.message.outer_middleware(ForcedMembershipMiddleware())
+    dispatcher.edited_message.outer_middleware(ForcedMembershipMiddleware())
     dispatcher.message.outer_middleware(BotStartGateMiddleware())
     dispatcher.edited_message.outer_middleware(BotStartGateMiddleware())
     # Opt-in message archival (no-op unless MESSAGE_ARCHIVE_ENABLED). Runs as an

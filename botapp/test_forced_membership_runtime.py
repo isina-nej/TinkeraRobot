@@ -44,6 +44,21 @@ class ForcedMembershipExemptionTest(SimpleTestCase):
         assert _is_exempt_message(anonymous_admin) is True
         assert _is_exempt_message(external_channel) is False
 
+    def test_dispatcher_installs_forced_membership_middleware_on_edited_messages_too(self):
+        from botapp.forced_membership_handlers import router as forced_router
+        from botapp.forced_membership_runtime import ForcedMembershipMiddleware
+        from botapp.management.commands.runbot import build_dispatcher, router as main_router
+
+        try:
+            dispatcher = build_dispatcher("NuyaRobot")
+            assert any(
+                isinstance(middleware, ForcedMembershipMiddleware)
+                for middleware in dispatcher.edited_message.outer_middleware._middlewares
+            )
+        finally:
+            forced_router._parent_router = None
+            main_router._parent_router = None
+
 
 class ForcedMembershipRuntimeTest(TestCase):
     def setUp(self):
