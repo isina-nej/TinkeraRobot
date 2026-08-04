@@ -93,6 +93,7 @@ class GroupSettings(models.Model):
         null=True,
         blank=True,
         default=10,
+        validators=[MinValueValidator(1)],
     )
     warning_expiry_days = models.PositiveIntegerField(default=30)
     message_templates = models.JSONField(default=dict, blank=True)

@@ -417,6 +417,18 @@ class ModerationApiTest(TestCase):
         assert self.group.max_warnings_action_delay_minutes == 15
         assert self.group.message_templates["mute"] == "{target} ساکت شد"
 
+    def test_zero_duration_is_rejected_instead_of_crashing_later(self):
+        _, raw = create_api_key("settings-write", self.staff)
+        response = self.client.post(
+            reverse("group-settings-api", args=[-400]),
+            data={"max_warnings_action_duration_minutes": 0},
+            content_type="application/json",
+            HTTP_X_API_KEY=raw,
+        )
+        assert response.status_code == 400
+        self.group.refresh_from_db()
+        assert self.group.max_warnings_action_duration_minutes != 0
+
 
 class ChatLinkTest(TestCase):
     def test_expired_or_inactive_link_is_invalid(self):
