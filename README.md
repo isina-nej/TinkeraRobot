@@ -191,3 +191,112 @@ cp .env.example .env
   - متن Prompt در دیتابیس (حافظه)، لاگ‌های عمومی یا متن پیام‌های فورواردشده ذخیره نمی‌شود.
   - با استفاده از فلگ متغیرمحیطی `NOYA_SYSTEM_PROMPT_ENABLED=false` می‌توان در زمان دیباگ یا رول‌بک آن را غیرفعال کرد.
 
+## ۷. دستیار مدیریتی هوشمند (Agent)
+
+ادمین می‌تواند با زبان طبیعی فارسی به ربات دستور مدیریتی بدهد. این قابلیت به‌صورت افزودنی روی معماری فعلی ساخته شده و همه‌ی فرمان‌ها و رفتارهای قبلی دست‌نخورده‌اند.
+
+### تریگرها
+
+```text
+/agent <دستور>
+/adminai <دستور>
+نویا مدیر، <دستور>     ← همیشه به Agent می‌رود (Parser قطعی و سپس AI)
+نویا، <دستور مدیریتی>  ← فقط اگر Parser قطعی Intent را تشخیص دهد
+```
+
+تفاوت دو تریگر متنی:
+
+- **«نویا مدیر، …»** (فقط ادمین): همیشه به Agent مسیر داده می‌شود؛ ابتدا Parser قطعی و اگر تشخیص نداد، AI Structured Parser اجرا می‌شود. پس دستورات پیچیده‌ی نیازمند AI از دست نمی‌روند.
+- **«نویا، …»** (فقط ادمین): فقط زمانی به Agent می‌رود که Parser قطعی یک Intent مطمئن تشخیص دهد؛ در غیر این‌صورت پیام به گفت‌وگوی عادی نویا fall-through می‌کند (رفتار قبلی حفظ شده است).
+
+در هر دو حالت کاربران عادی هرگز نمی‌توانند این تریگرها را فعال کنند، عملیات ناشناخته/کم‌اطمینان اجرا نمی‌شود، و پیام Replyشده فقط به‌عنوان داده‌ی غیرقابل اعتماد وارد Context می‌شود. فرمان‌های قطعی موجود (mute، ban، حذف، قفل و…) و فرمان‌های بدون اسلش و `/prompt` بدون تغییر کار می‌کنند.
+
+### جریان اجرا
+
+`Trigger → Admin Verification → Deterministic Parser → (AI Structured Parser) → Schema Validation → Registry Lookup → App Permission → Bot Capability → Target Resolution → Risk → Confirmation → Existing-Service Execution → Audit → Persian Response`
+
+- ابتدا یک Parser قطعی و کم‌هزینه فارسی اجرا می‌شود؛ فقط اگر نتیجه نداد و `AGENT_AI_ENABLED=true` باشد، درخواست برای مدل ارسال می‌شود.
+- مدل AI فقط یک `AgentDecision` معتبر و allowlist‌شده تولید می‌کند؛ هرگز مستقیماً عملیات تلگرام یا دیتابیس انجام نمی‌دهد.
+- عملیات state‌دار مدیریتی از همان Pipeline موجود (`queue_or_execute` → `ModerationAction`) استفاده می‌کنند.
+- کاربر هدف فقط از Reply تعیین می‌شود؛ مدل اجازه‌ی ساختن `user_id` را ندارد.
+- محتوای Reply/نقل‌قول به‌عنوان `<untrusted_message>` (داده، نه دستور) به مدل داده می‌شود.
+
+### تأیید عملیات حساس
+
+عملیات پرخطر (ban، mute، قفل، حذف، تغییر تنظیمات امنیتی) پیش از اجرا یک پیام تأیید با دکمه‌های «✅ تأیید / ❌ لغو» نمایش می‌دهند. فقط درخواست‌دهنده، در همان گروه، و تا قبل از انقضا (پیش‌فرض ۱۲۰ ثانیه) می‌تواند تأیید کند. Tool Registry منبع نهایی سطح ریسک است؛ اگر مدل ریسک کمتری اعلام کند، مقدار Registry اعمال می‌شود.
+
+رفتار دقیق Token تأیید:
+
+- یک Token تصادفی و غیرقابل حدس با `secrets.token_urlsafe` (بیش از ۱۲۸ بیت entropy) تولید می‌شود.
+- Token خام فقط داخل `callback_data` دکمه‌های Inline قرار می‌گیرد (`agent_confirm:<token>` / `agent_cancel:<token>`).
+- در دیتابیس فقط SHA-256 Hash توکن ذخیره می‌شود (`token_hash`)، نه خودِ توکن.
+- هنگام دریافت Callback، توکن Hash شده و رکورد با Hash پیدا می‌شود؛ توکن خام دور ریخته می‌شود.
+- Token خام هرگز در Log، Audit Log یا مدل دیتابیس ذخیره نمی‌شود.
+- طول `callback_data` همیشه زیر محدودیت ۶۴ بایتی تلگرام می‌ماند (پیشوند ≤۱۴ بایت + توکن ۳۲ کاراکتری).
+
+### آرشیو پیام (اختیاری)
+
+با `MESSAGE_ARCHIVE_ENABLED=true` ربات پیام‌های دریافتی گروه را آرشیو می‌کند و حذف‌هایی را که خودش انجام می‌دهد ثبت می‌کند. مطابق محدودیت واقعی Telegram، حذف دستی کاربران در گروه‌های عادی برای ربات قابل مشاهده نیست و ربات چنین ادعایی نمی‌کند. پاک‌سازی دوره‌ای:
+
+```bash
+.venv/bin/python manage.py purge_message_snapshots
+```
+
+### متغیرهای محیطی
+
+```text
+AGENT_ENABLED=true
+AGENT_AI_ENABLED=true
+AGENT_MODEL=
+AGENT_CONFIRMATION_TTL_SECONDS=120
+AGENT_MIN_CONFIDENCE=0.80
+AGENT_MAX_COMMAND_LENGTH=2000
+MESSAGE_ARCHIVE_ENABLED=false
+MESSAGE_ARCHIVE_RETENTION_DAYS=30
+```
+
+مدل‌های جدید `AgentConfirmation`، `AgentAuditLog` و `MessageSnapshot` در پنل Django قابل مشاهده‌اند. برای Rollback بدون تغییر کد کافی است `AGENT_ENABLED=false` تنظیم شود.
+
+### بازیابی عملیات‌های گیرکرده
+
+اگر یک Process پس از Claim‌شدن تأیید ولی پیش از پایان اجرا از کار بیفتد، رکورد ممکن است در وضعیت `executing` بماند. برای گزارش/بستن این رکوردها بدون اجرای مجدد عملیات خطرناک:
+
+```bash
+.venv/bin/python manage.py agent_confirmations_recover            # فقط گزارش
+.venv/bin/python manage.py agent_confirmations_recover --fail      # علامت‌گذاری به‌عنوان failed (بدون اجرای مجدد)
+```
+
+### تست زنده با ربات مستقل
+
+هرگز از توکن ربات production برای Polling استفاده نکنید. یک ربات آزمایشی جدا در BotFather بسازید و متغیرهای `TEST_BOT_TOKEN` (و اختیاری `TEST_GROUP_ID`، `TEST_ADMIN_USER_ID`) را تنظیم کنید، سپس:
+
+```bash
+.venv/bin/python manage.py run_testbot
+```
+
+این دستور فقط با `TEST_BOT_TOKEN` اجرا می‌شود و هرگز به `BOT_TOKEN` production بازنمی‌گردد؛ اگر متغیر تنظیم نشده باشد با خطای واضح متوقف می‌شود.
+
+### تست روی دیتابیس Production-like (MySQL)
+
+رفتار Lock هم‌زمان (`select_for_update`) در SQLite قابل اثبات نیست؛ تستِ `ConcurrentConfirmationTests` روی SQLite به‌صورت خودکار Skip می‌شود و فقط روی MySQL/Postgres اجرا می‌شود. برای اجرای کامل روی MySQL:
+
+```bash
+DB_ENGINE=django.db.backends.mysql DB_NAME=group_bot DB_USER=group_bot \
+  DB_PASSWORD=... DB_HOST=127.0.0.1 DB_PORT=3306 \
+  .venv/bin/python manage.py test
+```
+
+در CI پیش‌فرض (SQLite) این تست Skip می‌شود؛ برای پوشش کامل باید یک سرویس MySQL در CI اضافه شود.
+
+### هشدار امنیتی: توکن افشاشده
+
+اگر توکن ربات production در جایی مثل Chat، Log، Screenshot، Artifact یا محیط غیرمطمئن قرار گرفت، باید فوراً چرخانده (rotate) شود:
+
+1. در BotFather دستور `/revoke` را برای همان ربات اجرا کنید تا توکن قدیمی باطل شود.
+2. توکن جدید را فقط در یک Secret Manager (مثل بخش Secrets) قرار دهید، نه در کد/Chat/Log.
+3. سرویس production را با توکن جدید Restart کنید.
+4. توکن قدیمی را از تمام محیط‌های توسعه/CI حذف کنید.
+5. Logها و Artifactها را برای نشت احتمالی توکن بررسی کنید.
+
+هیچ توکن یا Secret نباید در Git، Log، Screenshot یا Artifact ذخیره شود.
+

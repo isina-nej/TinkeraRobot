@@ -71,6 +71,7 @@ from botapp.memory.commands import (
 from botapp.memory.integration import run_ai_with_memory
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
+from botapp.agent_handlers import ArchiveMiddleware, router as agent_router
 logger = logging.getLogger(__name__)
 
 TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID", "@CoffeeMan_nej").strip()
@@ -634,6 +635,16 @@ async def delete_message_ids(bot, chat_id, message_ids):
                     await bot.delete_message(chat_id=chat_id, message_id=message_id)
                 except (TelegramBadRequest, TelegramForbiddenError):
                     continue
+    # Best-effort: record that the bot deleted these messages (opt-in archive).
+    try:
+        from botapp import message_archive
+
+        if message_ids and message_archive.archive_enabled():
+            await sync_to_async(message_archive.mark_deleted_by_bot, thread_sensitive=True)(
+                chat_id, message_ids, reason="moderation.delete"
+            )
+    except Exception:  # archival must never break moderation
+        logger.debug("snapshot delete-marking failed", exc_info=True)
 
 
 async def perform_delete(message: Message, bot: Bot, args: str = ""):
@@ -1688,18 +1699,25 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
     dispatcher.message.outer_middleware(ForcedMembershipMiddleware())
     dispatcher.message.outer_middleware(BotStartGateMiddleware())
     dispatcher.edited_message.outer_middleware(BotStartGateMiddleware())
+    # Opt-in message archival (no-op unless MESSAGE_ARCHIVE_ENABLED). Runs as an
+    # outer middleware so it captures group messages regardless of routing.
+    dispatcher.message.outer_middleware(ArchiveMiddleware())
+    dispatcher.edited_message.outer_middleware(ArchiveMiddleware())
 
     # Routers are module-level singletons.
     # Tests call build_dispatcher() repeatedly in the same process.
     # Must detach properly by cleaning sub_routers and the private _parent_router.
     # Using the public setter raises "Router is already attached".
-    for r in (forced_membership_router, router, emoji_router, nouya_router):
+    # NOTE: agent_router is included BEFORE the main router so /agent, /adminai
+    # and the strict "نویا،" trigger are matched before the catch-all handlers.
+    for r in (agent_router, forced_membership_router, router, emoji_router, nouya_router):
         if r._parent_router is not None:
             parent = r._parent_router
             if hasattr(parent, "sub_routers") and r in parent.sub_routers:
                 parent.sub_routers.remove(r)
             r._parent_router = None
 
+    dispatcher.include_router(agent_router)
     dispatcher.include_router(forced_membership_router)
     dispatcher.include_router(router)
     dispatcher.include_router(emoji_router)

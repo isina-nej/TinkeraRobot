@@ -737,3 +737,141 @@ class CustomEmoji(models.Model):
         verbose_name = "Custom Emoji"
         verbose_name_plural = "Custom Emojis"
         ordering = ["name"]
+
+
+class MessageSnapshot(models.Model):
+    """Archive of messages the bot itself received/deleted in a group.
+
+    Telegram does not give bots a reliable public event for *manual* message
+    deletions in ordinary groups, so this only ever records messages the bot
+    observed and (optionally) deletions the bot itself performed.
+    """
+
+    chat_id = models.BigIntegerField(db_index=True)
+    message_id = models.BigIntegerField()
+    thread_id = models.BigIntegerField(default=0)
+    sender_user_id = models.BigIntegerField(null=True, blank=True)
+    sender_chat_id = models.BigIntegerField(null=True, blank=True)
+    sender_name = models.CharField(max_length=255, blank=True, default="")
+    sender_username = models.CharField(max_length=64, blank=True, default="")
+    text = models.TextField(blank=True, default="")
+    caption = models.TextField(blank=True, default="")
+    content_type = models.CharField(max_length=32, blank=True, default="text")
+    reply_to_message_id = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(null=True, blank=True)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    archived_at = models.DateTimeField(auto_now_add=True)
+    deleted_by_bot_at = models.DateTimeField(null=True, blank=True)
+    deletion_reason = models.CharField(max_length=255, blank=True, default="")
+    deletion_action = models.ForeignKey(
+        ModerationAction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="message_snapshots",
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chat_id", "message_id"],
+                name="uniq_message_snapshot_chat_message",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["chat_id", "-archived_at"]),
+            models.Index(fields=["chat_id", "deleted_by_bot_at"]),
+        ]
+        ordering = ["-archived_at"]
+
+    def __str__(self):
+        return f"MessageSnapshot({self.chat_id}:{self.message_id})"
+
+
+class AgentConfirmation(models.Model):
+    """A pending high/medium-risk operation awaiting a glass-key confirmation."""
+
+    STATUS_PENDING = "pending"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_EXPIRED = "expired"
+    STATUS_EXECUTING = "executing"
+    STATUS_EXECUTED = "executed"
+    STATUS_FAILED = "failed"
+    STATUSES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_EXECUTING, "Executing"),
+        (STATUS_EXECUTED, "Executed"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    token_hash = models.CharField(max_length=64, unique=True)
+    chat_id = models.BigIntegerField(db_index=True)
+    request_message_id = models.BigIntegerField(null=True, blank=True)
+    confirmation_message_id = models.BigIntegerField(null=True, blank=True)
+    requester_user_id = models.BigIntegerField()
+    requester_name = models.CharField(max_length=255, blank=True, default="")
+    tool_name = models.CharField(max_length=64)
+    target_user_id = models.BigIntegerField(null=True, blank=True)
+    validated_parameters = models.JSONField(default=dict, blank=True)
+    human_summary = models.CharField(max_length=300, blank=True, default="")
+    risk_level = models.CharField(max_length=8, default="medium")
+    status = models.CharField(max_length=12, choices=STATUSES, default=STATUS_PENDING, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    # Set when the row transitions to "executing"; used to detect records left
+    # stuck in "executing" if the process died mid-execution (recovery policy).
+    executing_started_at = models.DateTimeField(null=True, blank=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+    result_summary = models.CharField(max_length=500, blank=True, default="")
+    error_code = models.CharField(max_length=64, blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "expires_at"]),
+            models.Index(fields=["chat_id", "requester_user_id", "status"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"AgentConfirmation({self.pk}:{self.tool_name}:{self.status})"
+
+
+class AgentAuditLog(models.Model):
+    """Structured audit trail for every admin-agent request.
+
+    Sensitive material (tokens, keys, secrets, full prompts) is never stored.
+    """
+
+    request_id = models.CharField(max_length=36, db_index=True)
+    chat_id = models.BigIntegerField(db_index=True)
+    requester_user_id = models.BigIntegerField()
+    requester_role = models.CharField(max_length=16, blank=True, default="")
+    original_command = models.CharField(max_length=2000, blank=True, default="")
+    parser_type = models.CharField(max_length=16, blank=True, default="")
+    detected_intent = models.CharField(max_length=64, blank=True, default="")
+    tool_name = models.CharField(max_length=64, blank=True, default="")
+    sanitized_parameters = models.JSONField(default=dict, blank=True)
+    risk_level = models.CharField(max_length=8, blank=True, default="")
+    confirmation_status = models.CharField(max_length=16, blank=True, default="")
+    execution_status = models.CharField(max_length=16, blank=True, default="")
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    duration_ms = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["chat_id", "-created_at"]),
+            models.Index(fields=["tool_name", "-created_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"AgentAuditLog({self.request_id}:{self.tool_name})"

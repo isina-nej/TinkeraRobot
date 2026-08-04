@@ -4,6 +4,8 @@ from django.contrib import admin
 from botapp.memory import admin as memory_admin  # noqa: F401
 
 from botapp.models import (
+    AgentAuditLog,
+    AgentConfirmation,
     BotMessageSettings,
     BotStartGateEvent,
     GroupUserGateState,
@@ -15,6 +17,7 @@ from botapp.models import (
     ForcedMembershipInviteLink,
     ForcedMembershipRule,
     ForcedMembershipUserState,
+    MessageSnapshot,
     ModerationAction,
     ModerationLog,
     StaffAPIKey,
@@ -292,6 +295,63 @@ class ForcedMembershipEventAdmin(admin.ModelAdmin):
     list_filter = ("event_type", "created_at")
     search_fields = ("=rule__id", "=telegram_user_id", "=telegram_update_id")
     readonly_fields = tuple(field.name for field in ForcedMembershipEvent._meta.fields)
+
+
+@admin.register(MessageSnapshot)
+class MessageSnapshotAdmin(admin.ModelAdmin):
+    list_display = (
+        "chat_id",
+        "message_id",
+        "sender_username",
+        "content_type",
+        "deleted_by_bot_at",
+        "deletion_reason",
+        "archived_at",
+    )
+    list_filter = ("content_type", "deleted_by_bot_at", "archived_at")
+    search_fields = ("=chat_id", "=message_id", "=sender_user_id", "sender_username", "sender_name")
+    date_hierarchy = "archived_at"
+    readonly_fields = tuple(field.name for field in MessageSnapshot._meta.fields)
+
+
+@admin.register(AgentConfirmation)
+class AgentConfirmationAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "chat_id",
+        "requester_user_id",
+        "tool_name",
+        "risk_level",
+        "status",
+        "executing_started_at",
+        "expires_at",
+        "created_at",
+    )
+    list_filter = ("status", "risk_level", "created_at")
+    search_fields = ("=chat_id", "=requester_user_id", "tool_name")
+    date_hierarchy = "created_at"
+    # token_hash and full parameters are intentionally read-only; no direct
+    # execution actions are exposed from the admin.
+    readonly_fields = tuple(field.name for field in AgentConfirmation._meta.fields)
+
+
+@admin.register(AgentAuditLog)
+class AgentAuditLogAdmin(admin.ModelAdmin):
+    list_display = (
+        "created_at",
+        "chat_id",
+        "requester_user_id",
+        "requester_role",
+        "tool_name",
+        "risk_level",
+        "execution_status",
+        "error_code",
+        "duration_ms",
+    )
+    list_filter = ("execution_status", "risk_level", "parser_type", "created_at")
+    search_fields = ("=chat_id", "=requester_user_id", "tool_name", "detected_intent", "request_id")
+    date_hierarchy = "created_at"
+    readonly_fields = tuple(field.name for field in AgentAuditLog._meta.fields)
 
 
 @admin.register(ModerationLog)
