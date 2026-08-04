@@ -44,7 +44,14 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   dispatcher and handler wiring are valid.
 - Moderation REST API auth: send header `X-API-Key: <key>` (create a key with
   `manage.py create_api_key <name> --username <user>`; the plaintext is shown only once and
-  stored hashed) OR a logged-in staff session + CSRF token.
+  stored hashed) OR a logged-in staff session + CSRF token. Optional
+  `StaffAPIKey.allowed_chat_ids` (JSON list) scopes a key to specific Telegram
+  `chat_id`s; empty list keeps legacy unrestricted behavior.
+- When `MESSAGE_ARCHIVE_ENABLED=true`, schedule `manage.py purge_message_snapshots`
+  via cron/systemd — there is no in-process scheduler for it (see README).
+- Stale moderation worker rows: `mute`/`ban`/`lock` stuck in `processing` are
+  failed (not auto-retried) to avoid double Telegram side effects; release
+  actions (`unmute`/`unban`/`unlock`) are requeued.
 - Default DB is SQLite (`db.sqlite3`, gitignored); MySQL is optional via the `DB_*` env vars.
 - The test suite (`manage.py test`) logs expected AI-API failure tracebacks for the
   fail-open paths — those are not test failures; watch the final `OK` / ran-count line.

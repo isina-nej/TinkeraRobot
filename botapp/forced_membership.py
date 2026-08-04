@@ -100,15 +100,17 @@ def _message_event_exists(rule_id: int, update_id: int | None, message_id: int) 
 @sync_to_async(thread_sensitive=True)
 def evaluate_nonmember_message(rule_id: int, user, message_id: int, update_id: int | None) -> GateDecision:
     with transaction.atomic():
-        if _message_event_exists(rule_id, update_id, message_id):
-            state = ForcedMembershipUserState.objects.get(rule_id=rule_id, telegram_user_id=user.id)
-            return GateDecision("ignore", state.id)
-
+        # Lock the per-user state BEFORE the idempotency check. Album items share
+        # a synthetic negative source_message_id; checking existence outside the
+        # lock let concurrent workers both pass and emit duplicate warnings.
         state, _ = ForcedMembershipUserState.objects.select_for_update().get_or_create(
             rule_id=rule_id,
             telegram_user_id=user.id,
             defaults=_user_defaults(user),
         )
+        if _message_event_exists(rule_id, update_id, message_id):
+            return GateDecision("ignore", state.id)
+
         now = timezone.now()
         old_status = state.current_membership_status
         action = "warn" if state.first_warning_at is None and not state.has_ever_joined else "delete"

@@ -1128,7 +1128,6 @@ async def forget_all_memory(message: Message, command: CommandObject):
 @router.message(Command("prompt"))
 async def prompt(message: Message, command: CommandObject):
     chat = message.chat
-    user = message.from_user
 
     question = action_reason(command)
     if not question:
@@ -1144,6 +1143,17 @@ async def prompt(message: Message, command: CommandObject):
             session_id=f"telegram:{chat.id}",
         )
         await message.reply(answer)
+        return
+
+    # Group /prompt must honor the same collaboration + daily quota gates as @mention.
+    group = await get_or_create_group_settings(chat.id, chat.title or "")
+    if not group.collaboration_enabled:
+        await message.reply("همکاری هوش مصنوعی در این گروه غیرفعال است.")
+        return
+    if not await consume_group_quota(chat.id, chat.title or ""):
+        await message.reply(
+            f"گروه {chat.title or chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
+        )
         return
 
     await message.bot.send_chat_action(chat_id=chat.id, action="typing")
@@ -1506,6 +1516,14 @@ async def handle_text_message(message: Message, bot: Bot):
         question = message.text.strip()
 
     if is_noya and question:
+        # Same gates as the @mention path — prefix/reply must not bypass them.
+        if not group.collaboration_enabled:
+            return
+        if not await consume_group_quota(message.chat.id, message.chat.title or ""):
+            await message.reply(
+                f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
+            )
+            return
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         answer = await run_ai_with_memory(
             message,

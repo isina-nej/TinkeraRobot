@@ -234,6 +234,18 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
             )
             return AgentResult(text=preview, confirmation=confirmation, confirm_token=raw_token)
 
+        # Trail the intent before side effects so a crash mid-handler still leaves
+        # an audit row (confirmation path already claims the row first).
+        await _audit(
+            requester_role=ctx.admin.role,
+            parser_type=parser_type,
+            detected_intent=decision.intent,
+            tool_name=tool.name,
+            parameters=validated.model_dump(),
+            risk_level=risk,
+            confirmation_status="not_required",
+            execution_status="started",
+        )
         result_text = await tool.handler(ctx, bot, validated)
         await _audit(
             requester_role=ctx.admin.role,
@@ -313,6 +325,7 @@ async def execute_confirmed(bot, confirmation: AgentConfirmation) -> str:
             timezone_name=_setting("TIME_ZONE", ""),
         )
         validated = tool.validate_params(confirmation.validated_parameters)
+        await _audit("started")
         result_text = await tool.handler(ctx, bot, validated)
 
         await sync_to_async(confirmations.mark_executed, thread_sensitive=True)(confirmation, result_text)

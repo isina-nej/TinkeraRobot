@@ -147,6 +147,9 @@ class GroupSettingsAdmin(admin.ModelAdmin):
         "bot_start_required",
     )
     search_fields = ("=chat_id", "chat_title", "mandatory_channel")
+    # group_admins is maintained by the Telegram bot from live admin lists;
+    # staff must not hand-edit it into a privilege-escalation vector.
+    readonly_fields = ("group_admins",)
 
 
 @admin.register(GroupActionLog)
@@ -230,6 +233,17 @@ class StaffAPIKeyAdmin(admin.ModelAdmin):
     list_filter = ("is_active", "created_at", "revoked_at")
     search_fields = ("name", "prefix")
     readonly_fields = ("prefix", "key_hash", "created_at", "last_used_at")
+    fields = (
+        "name",
+        "prefix",
+        "key_hash",
+        "is_active",
+        "allowed_chat_ids",
+        "created_by",
+        "created_at",
+        "last_used_at",
+        "revoked_at",
+    )
 
 
 @admin.register(ForcedMembershipRule)

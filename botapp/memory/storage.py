@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -11,6 +12,40 @@ from botapp.models import (
     TelegramUser,
 )
 from .extraction import MemoryCandidate, extract_candidates, normalize_content, validate_candidate
+
+
+def _max_items_per_scope() -> int:
+    return max(int(getattr(settings, "MEMORY_MAX_ITEMS_PER_SCOPE", 200)), 1)
+
+
+def _enforce_active_item_cap(user, *, scope: str, conversation: MemoryConversation | None):
+    """Drop oldest non-critical active memories when a scope exceeds its cap."""
+    queryset = MemoryItem.objects.filter(
+        owner_user=user,
+        memory_scope=scope,
+        status=MemoryItem.Status.ACTIVE,
+    )
+    if scope == MemoryItem.Scope.USER:
+        queryset = queryset.filter(memory_scope=MemoryItem.Scope.USER)
+    else:
+        queryset = queryset.filter(conversation=conversation)
+    overflow = queryset.count() - _max_items_per_scope()
+    if overflow <= 0:
+        return
+    victims = list(
+        queryset.exclude(retention_level=MemoryItem.Retention.CRITICAL)
+        .order_by("last_confirmed_at", "created_at", "id")[:overflow]
+    )
+    for victim in victims:
+        victim.status = MemoryItem.Status.DELETED
+        victim.save(update_fields=["status", "updated_at"])
+        MemoryLifecycleEvent.objects.create(
+            memory=victim,
+            event_type="deleted",
+            old_status=MemoryItem.Status.ACTIVE,
+            new_status=MemoryItem.Status.DELETED,
+            reason="per-scope active item cap exceeded",
+        )
 
 
 def _expires_at(candidate: MemoryCandidate, now):
@@ -137,6 +172,7 @@ def ingest_candidate(
                     new_status=MemoryItem.Status.SUPERSEDED,
                     reason="new conflicting memory",
                 )
+        _enforce_active_item_cap(user, scope=scope, conversation=item_conversation)
     if message_id is not None:
         source, created = MemorySource.objects.get_or_create(
             memory=item,

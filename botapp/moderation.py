@@ -177,13 +177,33 @@ def mark_action_executed(action, executed_at=None):
     return complete_action(action, executed_at)[0]
 
 
+# Actions that apply a Telegram restriction. Auto-retrying these after a stale
+# ``processing`` timeout can double-apply the side effect if the first worker
+# already succeeded at Telegram but died before ``complete_action``.
+_SIDE_EFFECT_ACTIONS = frozenset({"mute", "ban", "lock"})
+# Release actions are safer to retry (idempotent-ish at Telegram).
+_RELEASE_ACTIONS = frozenset({"unmute", "unban", "unlock"})
+
+
 def requeue_stale_processing_actions(stale_minutes=10, now=None):
+    """Recover stuck ``processing`` rows without double-applying restrictions.
+
+    * ``mute`` / ``ban`` / ``lock`` → marked ``failed`` (manual review / re-issue).
+    * ``unmute`` / ``unban`` / ``unlock`` → requeued to ``pending``.
+    """
     now = now or timezone.now()
     cutoff = now - timedelta(minutes=max(stale_minutes, 1))
-    return ModerationAction.objects.filter(
-        status="processing",
-        started_at__lt=cutoff,
-    ).update(status="pending", started_at=None, error="requeued after stale processing timeout")
+    stale = ModerationAction.objects.filter(status="processing", started_at__lt=cutoff)
+    failed = stale.filter(action__in=_SIDE_EFFECT_ACTIONS).update(
+        status="failed",
+        error="stale processing timeout; not auto-retried to avoid double Telegram side effects",
+    )
+    requeued = stale.filter(action__in=_RELEASE_ACTIONS).update(
+        status="pending",
+        started_at=None,
+        error="requeued after stale processing timeout",
+    )
+    return failed + requeued
 
 
 def mark_action_failed(action, error):

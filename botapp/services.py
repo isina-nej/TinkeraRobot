@@ -18,17 +18,38 @@ _flood_events = defaultdict(deque)
 _duplicate_events = defaultdict(deque)
 
 
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff\u2060\u00ad]")
+# Scheme / www links, bare t.me / telegram.me, and common bare domains.
+_URL_RE = re.compile(
+    r"(?i)"
+    r"(?:https?://|www\.)[^\s<>()]+"
+    r"|(?:t\.me|telegram\.me)/[^\s<>()]+"
+    r"|(?<![\w./@-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|org|net|ir|io|me|info|xyz|app|dev|co|ai|tv|cc|pro|site|online|shop|blog)(?:/[^\s<>()]*)?"
+)
+
+
 def normalize_text(text: str) -> str:
-    return " ".join(text.casefold().split())
+    cleaned = _ZERO_WIDTH_RE.sub("", text or "")
+    return " ".join(cleaned.casefold().split())
 
 
 def contains_blocked_word(text: str, blocked_words: list[str]) -> bool:
     normalized = normalize_text(text)
-    return any(word.strip().casefold() in normalized for word in blocked_words if word.strip())
+    for word in blocked_words:
+        needle = normalize_text(word)
+        if needle and needle in normalized:
+            return True
+    return False
 
 
 def extract_urls(text: str) -> list[str]:
-    return re.findall(r"(?i)(?:https?://|www\.)[^\s<>()]+", text)
+    if not text:
+        return []
+    # Strip zero-width chars that can split an otherwise obvious URL.
+    cleaned = _ZERO_WIDTH_RE.sub("", text)
+    found = _URL_RE.findall(cleaned)
+    # Drop trailing punctuation commonly glued onto links in chat.
+    return [url.rstrip(".,!?;:،؛»\"')]") for url in found]
 
 
 def is_allowed_url(url: str, allowed_domains: list[str]) -> bool:
