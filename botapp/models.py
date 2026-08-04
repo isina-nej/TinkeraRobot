@@ -118,14 +118,6 @@ class GroupSettings(models.Model):
         related_name="welcomed_in_groups",
         help_text="Custom emoji to use in welcome messages for this group.",
     )
-    welcome_emoji = models.ForeignKey(
-        "CustomEmoji",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="welcomed_in_groups",
-        help_text="Custom emoji to use in welcome messages for this group.",
-    )
 
     def __str__(self):
         return f"GroupSettings({self.chat_id}) - {self.chat_title}"
