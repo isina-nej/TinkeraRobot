@@ -13,6 +13,16 @@ ACTION_TYPES = {"lock", "unlock", "mute", "unmute", "ban", "unban"}
 TARGET_REQUIRED = {"mute", "unmute", "ban", "unban"}
 REVERSALS = {"lock": "unlock", "mute": "unmute", "ban": "unban"}
 
+# Idempotency-key namespaces. Internal keys (auto-reversals, daily schedules)
+# live under "sys:" and are reserved. Keys coming from untrusted callers are
+# forced under "ext:" so they can never collide with — and thus pre-book /
+# poison — a reserved internal key (e.g. blocking an automatic unmute/unban or a
+# daily lock by pre-creating a row with that key).
+SYSTEM_KEY_PREFIX = "sys:"
+EXTERNAL_KEY_PREFIX = "ext:"
+_INTERNAL_SOURCES = {"system", "schedule"}
+_KEY_MAX_LENGTH = 80
+
 DEFAULT_MESSAGES = {
     "warn": "به {target} اخطار داده شد ({count}/{max_warnings}).",
     "warning_ceiling": "{target} به سقف اخطار رسید؛ {action} برای او ثبت شد.",
@@ -93,7 +103,16 @@ def create_action(
     if action in {"lock", "unlock"} and target_user_id is not None:
         raise ValueError("group actions cannot have target_user_id")
 
-    key = idempotency_key or uuid.uuid4().hex
+    if idempotency_key:
+        if source in _INTERNAL_SOURCES:
+            # Trusted internal callers already namespace their keys under "sys:".
+            key = idempotency_key
+        else:
+            # Untrusted callers (API, telegram) can never reach the "sys:"
+            # namespace, so they cannot pre-book a reserved reversal/schedule key.
+            key = f"{EXTERNAL_KEY_PREFIX}{idempotency_key}"[:_KEY_MAX_LENGTH]
+    else:
+        key = uuid.uuid4().hex
     existing = ModerationAction.objects.filter(idempotency_key=key).first()
     if existing:
         return existing, False
@@ -196,7 +215,7 @@ def create_reversal(action, executed_at=None):
         actor_name=action.actor_name,
         reason=f"automatic release for action {action.id}",
         delay_minutes=action.duration_minutes,
-        idempotency_key=f"reverse:{action.id}",
+        idempotency_key=f"{SYSTEM_KEY_PREFIX}reverse:{action.id}",
         source="system",
     )[0]
 
@@ -218,7 +237,7 @@ def enqueue_daily_group_schedules(now=None):
             action=schedule.action,
             actor_user_id=schedule.created_by_user_id,
             reason="daily group schedule",
-            idempotency_key=f"daily:{schedule.id}:{today.isoformat()}",
+            idempotency_key=f"{SYSTEM_KEY_PREFIX}daily:{schedule.id}:{today.isoformat()}",
             source="schedule",
         )
         schedule.last_enqueued_date = today

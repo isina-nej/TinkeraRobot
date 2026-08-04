@@ -310,6 +310,41 @@ class ScheduledModerationTest(TestCase):
         assert reversal.target_user_id == 1
         assert reversal.execute_at > timezone.now()
 
+    def test_external_key_cannot_poison_reversal(self):
+        action, _ = create_action(
+            group=self.group,
+            action="mute",
+            target_user_id=7,
+            duration_minutes=30,
+        )
+        # An untrusted caller tries to pre-book the internal reversal key so the
+        # automatic unmute would silently be skipped (leaving the user muted).
+        create_action(
+            group=self.group, action="lock",
+            idempotency_key=f"sys:reverse:{action.id}", source="api",
+        )
+        create_action(
+            group=self.group, action="lock",
+            idempotency_key=f"reverse:{action.id}", source="api",
+        )
+        reversal = create_reversal(action, timezone.now())
+        assert reversal is not None
+        assert reversal.action == "unmute"
+        assert reversal.target_user_id == 7
+
+    def test_external_key_cannot_poison_daily_schedule(self):
+        schedule = GroupSchedule.objects.create(
+            group=self.group, action="lock", time_of_day=time(8, 0),
+        )
+        now = timezone.make_aware(datetime(2026, 7, 22, 8, 1))
+        create_action(
+            group=self.group, action="unlock",
+            idempotency_key=f"sys:daily:{schedule.id}:{now.date().isoformat()}",
+            source="api",
+        )
+        assert enqueue_daily_group_schedules(now) == 1
+        assert self.group.actions.filter(action="lock", source="schedule").count() == 1
+
     def test_cancel_only_pending_action(self):
         action, _ = create_action(group=self.group, action="lock")
         cancel_action(action)
