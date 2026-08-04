@@ -68,7 +68,7 @@ def render_group_message(group, key, **context):
     template = group.message_templates.get(key) or DEFAULT_MESSAGES[key]
     try:
         return template.format(**context)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, IndexError):
         return DEFAULT_MESSAGES[key].format(**context)
 
 

@@ -331,6 +331,10 @@ class ScheduledModerationTest(TestCase):
         assert render_group_message(self.group, "ban", target="Ali") == "Ali اخراج شد"
         assert "سکوت" in render_group_message(self.group, "mute", target="Ali")
 
+    def test_template_with_positional_placeholder_falls_back_instead_of_crashing(self):
+        self.group.message_templates = {"ban": "{0} اخراج شد"}
+        assert render_group_message(self.group, "ban", target="Ali") == "Ali بن شد."
+
     def test_action_validation(self):
         assert validate_action_spec("mute", 60, 30).is_delayed is True
         with self.assertRaises(ValueError):
