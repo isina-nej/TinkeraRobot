@@ -214,14 +214,14 @@ class ModerationActionAdmin(admin.ModelAdmin):
     )
     list_filter = ("action", "status", "source", "execute_at")
     search_fields = ("=group__chat_id", "=target_user_id", "target_name", "reason")
-    readonly_fields = (
-        "idempotency_key",
-        "created_at",
-        "started_at",
-        "executed_at",
-        "cancelled_at",
-        "error",
-    )
+    # Operational fields are read-only in admin so staff cannot hand-edit a
+    # scheduled action (target, action, execute_at, status, ...) and bypass the
+    # queue_or_execute pipeline. Actions must be created/cancelled via the bot
+    # or API, not by editing rows here.
+    readonly_fields = tuple(field.name for field in ModerationAction._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(StaffAPIKey)
@@ -313,6 +313,12 @@ class MessageSnapshotAdmin(admin.ModelAdmin):
     date_hierarchy = "archived_at"
     readonly_fields = tuple(field.name for field in MessageSnapshot._meta.fields)
 
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(AgentConfirmation)
 class AgentConfirmationAdmin(admin.ModelAdmin):
@@ -334,6 +340,13 @@ class AgentConfirmationAdmin(admin.ModelAdmin):
     # execution actions are exposed from the admin.
     readonly_fields = tuple(field.name for field in AgentConfirmation._meta.fields)
 
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # Preserve the confirmation trail; staff must not delete these records.
+        return False
+
 
 @admin.register(AgentAuditLog)
 class AgentAuditLogAdmin(admin.ModelAdmin):
@@ -352,6 +365,13 @@ class AgentAuditLogAdmin(admin.ModelAdmin):
     search_fields = ("=chat_id", "=requester_user_id", "tool_name", "detected_intent", "request_id")
     date_hierarchy = "created_at"
     readonly_fields = tuple(field.name for field in AgentAuditLog._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # The audit trail is append-only; staff must not be able to erase it.
+        return False
 
 
 @admin.register(ModerationLog)

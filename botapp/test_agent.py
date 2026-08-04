@@ -174,6 +174,31 @@ class _StaticProvider:
 # --- Unit: parser ------------------------------------------------------------
 
 
+class AdminProtectionTests(SimpleTestCase):
+    """Audit/confirmation/snapshot records must not be deletable from admin."""
+
+    def test_append_only_models_block_add_and_delete(self):
+        from django.contrib import admin as dj_admin
+
+        from botapp.models import (
+            AgentAuditLog,
+            AgentConfirmation,
+            MessageSnapshot,
+            ModerationAction,
+        )
+
+        for model in (AgentAuditLog, AgentConfirmation, MessageSnapshot):
+            ma = dj_admin.site._registry[model]
+            self.assertFalse(ma.has_add_permission(None), model.__name__)
+            self.assertFalse(ma.has_delete_permission(None), model.__name__)
+
+        # ModerationAction: no manual creation, and every field is read-only.
+        ma = dj_admin.site._registry[ModerationAction]
+        self.assertFalse(ma.has_add_permission(None))
+        field_names = {f.name for f in ModerationAction._meta.fields}
+        self.assertTrue(field_names.issubset(set(ma.readonly_fields)))
+
+
 class ParserUnitTests(SimpleTestCase):
     def test_normalize_persian_digits(self):
         self.assertEqual(normalize_digits("۳۰ و ۱۲۴۵۰"), "30 و 12450")
