@@ -1331,6 +1331,7 @@ async def handle_toggle_callback(callback: CallbackQuery, bot: Bot):
     group = await get_or_create_group_settings(chat_id)
     text = group_settings_text(group)
     keyboard = get_group_settings_keyboard(group)
+    await callback.message.edit_text(text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith("maxwarn:"))

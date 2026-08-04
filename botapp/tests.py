@@ -541,6 +541,28 @@ class AiApiTest(TestCase):
         assert result == "خطا در ارتباط با هوش مصنوعی. لطفا دوباره تلاش کنید."
 
 
+class PanelCallbackTest(TestCase):
+    def test_toggle_callback_refreshes_the_panel_message(self):
+        from botapp.management.commands.runbot import handle_toggle_callback
+
+        group = GroupSettings.objects.create(chat_id=-500, chat_title="panel", welcome_enabled=True)
+        callback = AsyncMock()
+        callback.from_user.id = 1
+        callback.from_user.first_name = "Admin"
+        callback.data = f"toggle:welcome:{group.chat_id}"
+        callback.message = AsyncMock()
+
+        with patch(
+            "botapp.management.commands.runbot.is_group_admin",
+            AsyncMock(return_value=True),
+        ):
+            async_to_sync(handle_toggle_callback)(callback, AsyncMock())
+
+        group.refresh_from_db()
+        assert group.welcome_enabled is False
+        callback.message.edit_text.assert_called_once()
+
+
 class HealthcheckTest(TestCase):
     def test_healthcheck(self):
         response = self.client.get(reverse("healthcheck"))
