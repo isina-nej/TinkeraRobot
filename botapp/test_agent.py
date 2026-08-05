@@ -1151,3 +1151,41 @@ class ChannelAndBriefingIntegrationTests(TestCase):
             "analytics.get_top_moderated_users",
         ):
             self.assertTrue(registry.has(name), name)
+
+
+class MessageActivityAnalyticsTests(TestCase):
+    def setUp(self):
+        clear_role_cache()
+        self.chat_id = -1003861069387
+        GroupSettings.objects.get_or_create(chat_id=self.chat_id, defaults={"chat_title": "ایرانیان مقیم ایران"})
+
+    def test_parser_routes_message_count_questions(self):
+        self.assertEqual(
+            parse("گروه رو تحلیل کن ببین امروز چندتا پیام داد").tool,
+            "analytics.get_message_activity_today",
+        )
+        self.assertEqual(parse("تعداد پیام امروز چقدره؟").tool, "analytics.get_message_activity_today")
+        self.assertEqual(parse("آمار پیام هفته").tool, "analytics.get_message_activity_period")
+
+    def test_activity_counter_and_tool(self):
+        from botapp import activity as activity_svc
+
+        for i in range(3):
+            msg = make_message(f"hi {i}", chat_id=self.chat_id, user_id=10 + i, message_id=100 + i)
+            activity_svc.record_message_activity(msg)
+        # same user again
+        activity_svc.record_message_activity(
+            make_message("again", chat_id=self.chat_id, user_id=10, message_id=200)
+        )
+        row = activity_svc.get_activity(self.chat_id)
+        self.assertEqual(row.message_count, 4)
+        self.assertEqual(row.unique_sender_count, 3)
+
+        bot = admin_bot(42)
+        result = async_to_sync(handle_admin_command)(
+            bot,
+            make_message("x", chat_id=self.chat_id, user_id=42),
+            "امروز چندتا پیام داد",
+        )
+        self.assertFalse(result.error)
+        self.assertIn("۴", result.text)  # fa_number for 4

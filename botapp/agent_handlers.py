@@ -34,6 +34,7 @@ from botapp.agent.ai import NoyaAgentProvider
 from botapp.agent.orchestrator import AgentResult, handle_admin_command
 from botapp.agent.parser import parse as deterministic_parse
 from botapp.agent.permissions import resolve_admin_identity
+from botapp import activity
 from botapp import agent_tools  # noqa: F401  (registers tools into the registry)
 from botapp import message_archive
 
@@ -49,6 +50,13 @@ _ADMIN_PREFIXES = ("نویا مدیر،", "نویا مدیر ,", "نویا مد�
 # recognises a definite admin intent; otherwise the message falls through to
 # normal Noya chat unchanged.
 _NOYA_PREFIXES = ("نویا،", "نویا ,", "نویا,", "نویا ", "noya,", "noya ")
+# When an admin replies to the bot, these hints mean "ops/analytics", not smalltalk.
+_ADMIN_REPLY_HINTS = (
+    "تحلیل", "آنالیز", "آمار", "گزارش", "پیام", "چندتا", "چند تا", "چند ",
+    "تعداد", "امروز", "هفته", "ادمین", "قفل", "بن ", "بن‌", "سکوت", "میوت",
+    "اخطار", "تنظیمات", "مشترک", "عضو", "حذف", "پین", "کانال", "گروه",
+    "فعالیت", "ارسال", "پست", "mute", "ban", "warn", "stats", "analyze",
+)
 
 
 def _agent_enabled() -> bool:
@@ -123,20 +131,45 @@ class AgentTriggerFilter(BaseFilter):
 
         # 2) Plain trigger — agent only for a recognised deterministic intent.
         command = _strip_prefix(stripped, lowered, _NOYA_PREFIXES)
-        if not command:
-            return False
-        # Strip a leading chat ref so deterministic parse sees the real intent.
-        from botapp.agent.target_chat import extract_explicit_chat_ref
+        if command:
+            from botapp.agent.target_chat import extract_explicit_chat_ref
 
-        _, remainder = extract_explicit_chat_ref(command)
-        parse_text = remainder or command
-        if deterministic_parse(parse_text) is None:
-            return False
-        if message.chat.type != ChatType.PRIVATE:
-            identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
-            if not identity.is_admin:
+            _, remainder = extract_explicit_chat_ref(command)
+            parse_text = remainder or command
+            if deterministic_parse(parse_text) is None:
                 return False
-        return {"agent_command": command}
+            if message.chat.type != ChatType.PRIVATE:
+                identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
+                if not identity.is_admin:
+                    return False
+            return {"agent_command": command}
+
+        # 3) Admin reply-to-bot with ops/analytics intent → agent (NOT Noya chat).
+        # This is what makes «گروه رو تحلیل کن ببین امروز چندتا پیام داد» work when
+        # the admin replies to a previous bot message instead of using /agent.
+        replied = getattr(message, "reply_to_message", None)
+        replied_user = getattr(replied, "from_user", None) if replied else None
+        if replied_user is not None and message.chat.type in {
+            ChatType.GROUP,
+            ChatType.SUPERGROUP,
+            ChatType.PRIVATE,
+        }:
+            me = await bot.me()
+            if int(replied_user.id) == int(me.id):
+                from botapp.agent.target_chat import extract_explicit_chat_ref
+
+                _, remainder = extract_explicit_chat_ref(stripped)
+                parse_text = remainder or stripped
+                looks_admin = deterministic_parse(parse_text) is not None or any(
+                    hint in lowered for hint in _ADMIN_REPLY_HINTS
+                )
+                if looks_admin:
+                    identity = await resolve_admin_identity(
+                        bot, message.chat.id, message.from_user
+                    )
+                    if identity.is_admin:
+                        return {"agent_command": stripped}
+        return False
 
 
 def _confirmation_keyboard(raw_token: str) -> InlineKeyboardMarkup:
@@ -230,16 +263,23 @@ async def cancel_callback(callback: CallbackQuery):
 
 
 class ArchiveMiddleware(BaseMiddleware):
-    """Best-effort message archival. Opt-in via ``MESSAGE_ARCHIVE_ENABLED``.
+    """Observe every chat message for analytics; optionally archive full text.
 
-    Runs as an outer middleware so it captures group messages regardless of
-    which router ultimately handles them. Never blocks or alters the pipeline.
+    * Activity counters (message/media/unique senders per day) are ALWAYS on.
+    * Full ``MessageSnapshot`` archival remains opt-in via ``MESSAGE_ARCHIVE_ENABLED``.
+
+    Never blocks or alters the handler pipeline.
     """
 
     async def __call__(self, handler, event, data):
-        if isinstance(event, Message) and message_archive.archive_enabled():
+        if isinstance(event, Message):
             try:
-                await sync_to_async(message_archive.archive_message, thread_sensitive=True)(event)
-            except Exception:  # archival must never break message handling
-                logger.debug("message archival failed", exc_info=True)
+                await sync_to_async(activity.record_message_activity, thread_sensitive=True)(event)
+            except Exception:  # activity must never break message handling
+                logger.debug("activity counter failed", exc_info=True)
+            if message_archive.archive_enabled():
+                try:
+                    await sync_to_async(message_archive.archive_message, thread_sensitive=True)(event)
+                except Exception:  # archival must never break message handling
+                    logger.debug("message archival failed", exc_info=True)
         return await handler(event, data)

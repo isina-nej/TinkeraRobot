@@ -1721,6 +1721,9 @@ def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] =
     # outer middleware so it captures group messages regardless of routing.
     dispatcher.message.outer_middleware(ArchiveMiddleware())
     dispatcher.edited_message.outer_middleware(ArchiveMiddleware())
+    # Channel posts are a separate event type; count them for channel analytics.
+    dispatcher.channel_post.outer_middleware(ArchiveMiddleware())
+    dispatcher.edited_channel_post.outer_middleware(ArchiveMiddleware())
 
     # Routers are module-level singletons.
     # Tests call build_dispatcher() repeatedly in the same process.

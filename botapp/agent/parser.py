@@ -132,11 +132,48 @@ def parse(command: str) -> AgentDecision | None:  # noqa: C901 - flat rule table
         return _decision("group.get_settings", {}, intent="get_settings", summary="نمایش تنظیمات گروه")
 
     # --- Read-only: analytics / audit ----------------------------------------
+    # Message volume — prefer before generic «آمار امروز» so «امروز چند پیام» lands here.
+    if _has_any(
+        text,
+        "چند پیام",
+        "چندتا پیام",
+        "چند تا پیام",
+        "تعداد پیام",
+        "آمار پیام",
+        "پیام داد",
+        "پیام داشته",
+        "پیام امروز",
+        "فعالیت پیام",
+        "چند نفر پیام",
+    ) or (
+        _has_any(text, "پیام") and _has_any(text, "چند", "تعداد", "امروز", "بشمر", "بشمار", "شمارش")
+    ):
+        if _has_any(text, "هفته", "۷ روز", "7 روز", "هفت روز"):
+            return _decision(
+                "analytics.get_message_activity_period",
+                {},
+                intent="message_activity_period",
+                summary="آمار پیام ۷ روز",
+            )
+        return _decision(
+            "analytics.get_message_activity_today",
+            {},
+            intent="message_activity_today",
+            summary="تعداد پیام امروز",
+        )
+    if _has_any(text, "فعال‌ترین", "فعال ترین", "بیشترین پیام", "تاپ ارسال", "پرکارترین"):
+        return _decision(
+            "analytics.get_top_senders_today",
+            {},
+            intent="top_senders",
+            summary="فعال‌ترین ارسال‌کنندگان امروز",
+        )
     if _has_any(text, "آمار امروز", "آمار فعالیت امروز", "فعالیت امروز", "آمار روز"):
         return _decision("analytics.get_today_summary", {}, intent="today_summary", summary="آمار امروز")
     if _has_any(text, "آمار هفته", "آمار هفتگی", "آمار ۷ روز", "آمار 7 روز", "گزارش هفته", "آمار هفت روز"):
         return _decision("analytics.get_period_summary", {}, intent="period_summary", summary="آمار ۷ روز")
     if _has_any(text, "تحلیل", "آنالیز", "briefing", "گزارش تحلیلی", "وضعیت کلی"):
+        # «تحلیل … چند پیام» already matched above; pure analysis → briefing.
         return _decision("analytics.generate_briefing", {}, intent="briefing", summary="تحلیل گروه/کانال")
     if _has_any(text, "بیشترین تخلف", "بیشترین اخطار", "کاربران پرریسک", "تاپ متخلف", "بیشترین اقدام"):
         return _decision("analytics.get_top_moderated_users", {}, intent="top_moderated", summary="کاربران پرتکرار مدیریتی")

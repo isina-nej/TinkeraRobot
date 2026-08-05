@@ -228,6 +228,16 @@ cp .env.example .env
 ابزارهای ویژه کانال: `channel.get_info`، `channel.get_subscriber_count`، `channel.get_admins`، `channel.post_text`، `channel.delete_post`، `channel.pin_post`.  
 ابزار تحلیل: `analytics.generate_briefing` (آمار واقعی + خلاصه AI در صورت در دسترس بودن `NOYA_API_KEY`).
 
+شمارش پیام (همیشه روشن، بدون نیاز به آرشیو کامل متن):
+
+```text
+/agent امروز چندتا پیام داد؟
+/agent آمار پیام هفته
+/agent فعال‌ترین‌های امروز
+```
+
+ربات فقط پیام‌هایی را می‌شمارد که خودش از تلگرام دریافت کند (از لحظه فعال‌سازی؛ Bot API تاریخچه قدیمی را برنمی‌گرداند). ریپلای ادمین به پیام ربات با سؤال‌های آماری/مدیریتی هم به Agent می‌رود، نه به چت عمومی نویا.
+
 ### جریان اجرا
 
 `Trigger → Admin Verification → Deterministic Parser → (AI Structured Parser) → Schema Validation → Registry Lookup → App Permission → Bot Capability → Target Resolution → Risk → Confirmation → Existing-Service Execution → Audit → Persian Response`
