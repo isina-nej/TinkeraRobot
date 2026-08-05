@@ -55,3 +55,8 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
 - Default DB is SQLite (`db.sqlite3`, gitignored); MySQL is optional via the `DB_*` env vars.
 - The test suite (`manage.py test`) logs expected AI-API failure tracebacks for the
   fail-open paths — those are not test failures; watch the final `OK` / ran-count line.
+- Admin deep analysis uses `harness.investigate` (ReAct): read-only tools + optional
+  sandboxed Python (`botapp/agent/sandbox.py`). Phrases like «بررسی کامل» /
+  «تحلیل عمیق» route there; plain «تحلیل کن» still uses `analytics.generate_briefing`.
+  Toggle with `AGENT_HARNESS_ENABLED` / `AGENT_HARNESS_AI_ENABLED` (deterministic
+  read-tool pass when AI planner is off).

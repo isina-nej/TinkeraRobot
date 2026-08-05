@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from .context import AgentContext
 from .errors import AgentParseError, AIProviderError
-from .schemas import AgentDecision
+from .schemas import AgentDecision, HarnessStep
 
 logger = logging.getLogger("botapp.agent")
 
@@ -36,6 +36,7 @@ AGENT_SYSTEM_PROMPT = """تو یک تحلیلگر دستور مدیریتی بر
 - اگر chat_kind=channel است، از ابزارهای channel.* یا analytics/audit/read مناسب استفاده کن؛
   mute/ban/lock مخصوص گروه را برای کانال انتخاب نکن.
 - برای «تحلیل/آنالیز/گزارش مدیریتی» از analytics.generate_briefing استفاده کن.
+- برای «تحلیل عمیق / بررسی کامل / تحقیق مرحله‌ای» از harness.investigate استفاده کن.
 - برای «چند پیام امروز / تعداد پیام / آمار پیام» از analytics.get_message_activity_today
   یا analytics.get_message_activity_period استفاده کن — هرگز نگو به API دسترسی نداری.
 - برای ارسال متن به کانال از channel.post_text با parameters.value=متن استفاده کن.
@@ -46,6 +47,25 @@ AGENT_SYSTEM_PROMPT = """تو یک تحلیلگر دستور مدیریتی بر
 {"intent": "...", "tool": "...", "confidence": 0.0, "risk_level": "low|medium|high",
  "requires_confirmation": true, "parameters": {"target_source": "reply|user_id|self|none",
  "duration_minutes": null, "reason": "", "value": null}, "human_summary": "..."}
+"""
+
+HARNESS_SYSTEM_PROMPT = """تو برنامه‌ریز یک harness بررسی (ReAct) برای ادمین ربات تلگرام هستی.
+در هر گام فقط یک اقدام JSON انتخاب کن. هیچ متن اضافه ننویس.
+
+اقدام‌های مجاز:
+1) call_tool — اجرای یک ابزار خواندنی از allowed_tools
+   {"action":"call_tool","tool":"analytics.get_message_activity_today","args":{}}
+2) run_code — اجرای پایتون محدود روی دادهٔ جمع‌شده (متغیر data آماده است؛ نتیجه را در result بگذار)
+   {"action":"run_code","code":"result = data.get('count', 0)"}
+3) finish — پاسخ نهایی فارسی بر اساس مشاهدات
+   {"action":"finish","answer":"..."}
+
+قوانین:
+- فقط از ابزارهای allowed_tools استفاده کن؛ ابزار نوشتنی/خطرناک وجود ندارد.
+- اگر داده کافی برای پاسخ هست، finish کن؛ بی‌دلیل ابزار صدا نزن.
+- در run_code حق import/network/file نداری؛ فقط روی data حساب کن.
+- پاسخ finish باید فارسی، کوتاه و متکی به مشاهدات باشد؛ ادعا بدون داده نکن.
+- هرگز نگو به API تلگرام دسترسی نداری؛ ابزارها همان دسترسی هستند.
 """
 
 
@@ -155,3 +175,65 @@ class NoyaAgentProvider:
             ]
             repaired = await self._call(repair)
             return validate_decision(extract_json(repaired))
+
+    async def plan_harness_step(
+        self,
+        *,
+        user_text: str,
+        memory: str,
+        allowed_tools: list[str],
+        chat_id: int,
+        step: int,
+        max_steps: int,
+    ) -> dict:
+        user_prompt = (
+            f"chat_id={chat_id}\n"
+            f"step={step}/{max_steps}\n"
+            f"allowed_tools={json.dumps(allowed_tools, ensure_ascii=False)}\n"
+            f"USER_REQUEST:\n{(user_text or '').strip()}\n\n"
+            f"MEMORY:\n{memory}\n\n"
+            "یک اقدام JSON بعدی را برگردان."
+        )
+        messages = [
+            {"role": "system", "content": HARNESS_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        raw = await self._call(messages)
+        try:
+            return HarnessStep.model_validate(extract_json(raw)).model_dump()
+        except (AgentParseError, ValidationError):
+            repair = messages + [
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        "خروجی قبلی معتبر نبود. فقط یکی از این قالب‌ها را برگردان: "
+                        '{"action":"call_tool","tool":"...","args":{}} یا '
+                        '{"action":"run_code","code":"..."} یا '
+                        '{"action":"finish","answer":"..."}'
+                    ),
+                },
+            ]
+            repaired = await self._call(repair)
+            return HarnessStep.model_validate(extract_json(repaired)).model_dump()
+
+
+async def ask_harness_step(
+    *,
+    user_text: str,
+    memory: str,
+    allowed_tools: list[str],
+    chat_id: int,
+    step: int,
+    max_steps: int,
+) -> dict:
+    """Module-level helper used by the harness loop."""
+    provider = NoyaAgentProvider(timeout=45.0)
+    return await provider.plan_harness_step(
+        user_text=user_text,
+        memory=memory,
+        allowed_tools=allowed_tools,
+        chat_id=chat_id,
+        step=step,
+        max_steps=max_steps,
+    )

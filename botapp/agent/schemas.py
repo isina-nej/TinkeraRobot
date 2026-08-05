@@ -130,3 +130,20 @@ class TextContentParams(BaseModel):
     @classmethod
     def _trim(cls, value: str) -> str:
         return (value or "").strip()[:4000]
+
+
+class HarnessStep(BaseModel):
+    """One planning step inside the ReAct investigation harness."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    action: Literal["call_tool", "run_code", "finish"]
+    tool: str = ""
+    args: dict[str, Any] = Field(default_factory=dict)
+    code: str = Field(default="", max_length=4000)
+    answer: str = Field(default="", max_length=4000)
+
+    @field_validator("tool", "code", "answer")
+    @classmethod
+    def _strip_fields(cls, value: str) -> str:
+        return (value or "").strip()

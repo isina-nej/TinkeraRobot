@@ -1189,3 +1189,137 @@ class MessageActivityAnalyticsTests(TestCase):
         )
         self.assertFalse(result.error)
         self.assertIn("۴", result.text)  # fa_number for 4
+
+
+class SandboxAndHarnessTests(TestCase):
+    def setUp(self):
+        clear_role_cache()
+        GroupSettings.objects.get_or_create(chat_id=-1001, defaults={"chat_title": "Harness Group"})
+
+    def test_sandbox_allows_safe_analysis(self):
+        from botapp.agent.sandbox import run_sandboxed
+
+        out = run_sandboxed(
+            "result = sum(x['n'] for x in data['items'])",
+            data={"items": [{"n": 1}, {"n": 2}, {"n": 3}]},
+        )
+        self.assertTrue(out.ok)
+        self.assertEqual(out.result, 6)
+
+    def test_sandbox_blocks_import_and_open(self):
+        from botapp.agent.sandbox import run_sandboxed
+
+        self.assertFalse(run_sandboxed("import os\nresult = 1").ok)
+        self.assertFalse(run_sandboxed("result = open('/etc/passwd').read()").ok)
+        self.assertFalse(run_sandboxed("result = __import__('os').name").ok)
+
+    def test_parser_routes_deep_investigation(self):
+        self.assertEqual(parse("بررسی کامل کن").tool, "harness.investigate")
+        self.assertEqual(parse("تحلیل عمیق گروه").tool, "harness.investigate")
+        self.assertEqual(parse("مرحله به مرحله بررسی کن").tool, "harness.investigate")
+        # Simple briefing path stays intact.
+        self.assertEqual(parse("تحلیل کن").tool, "analytics.generate_briefing")
+
+    def test_harness_tool_registered(self):
+        self.assertTrue(registry.has("harness.investigate"))
+
+    @override_settings(
+        AGENT_ENABLED=True,
+        AGENT_AI_ENABLED=False,
+        AGENT_HARNESS_ENABLED=True,
+        AGENT_HARNESS_AI_ENABLED=False,
+    )
+    def test_deterministic_harness_via_command(self):
+        bot = admin_bot(42)
+        result = async_to_sync(handle_admin_command)(
+            bot,
+            make_message("x", chat_id=-1001, user_id=42),
+            "بررسی کامل کن",
+        )
+        self.assertFalse(result.error, result.text)
+        self.assertIn("بررسی", result.text)
+
+    @override_settings(AGENT_HARNESS_ENABLED=True, AGENT_HARNESS_AI_ENABLED=True)
+    def test_harness_react_loop_with_injected_planner(self):
+        from botapp.agent.harness import run_investigation
+        from botapp.agent.permissions import AdminIdentity, BotCapabilities
+
+        steps = [
+            {"action": "call_tool", "tool": "analytics.get_message_activity_today", "args": {}},
+            {
+                "action": "run_code",
+                "code": "result = {'n': data.get('count', 0)}",
+            },
+            {"action": "finish", "answer": "پاسخ نهایی harness: داده جمع شد."},
+        ]
+
+        async def planner(**kwargs):
+            return steps.pop(0)
+
+        ctx = AgentContext(
+            chat_id=-1001,
+            chat_type="supergroup",
+            chat_title="Harness Group",
+            admin=AdminIdentity(user_id=42, role=ADMINISTRATOR, display_name="Admin"),
+            bot_capabilities=BotCapabilities(
+                is_admin=True,
+                can_restrict_members=True,
+                can_delete_messages=True,
+                can_pin_messages=True,
+                can_post_messages=False,
+            ),
+            command_text="بررسی کامل",
+            group_settings=GroupSettings.objects.get(chat_id=-1001),
+        )
+        bot = admin_bot(42)
+        result = async_to_sync(run_investigation)(
+            ctx=ctx,
+            bot=bot,
+            user_text="بررسی کامل کن و جمع بزن",
+            step_planner=planner,
+            max_steps=5,
+        )
+        self.assertTrue(result.ok)
+        self.assertIn("پاسخ نهایی harness", result.answer)
+        self.assertGreaterEqual(result.steps_used, 3)
+        kinds = [o.kind for o in result.observations]
+        self.assertIn("tool", kinds)
+        self.assertIn("code", kinds)
+
+    @override_settings(AGENT_HARNESS_ENABLED=True)
+    def test_harness_refuses_write_tools(self):
+        from botapp.agent.harness import run_investigation
+        from botapp.agent.permissions import AdminIdentity, BotCapabilities
+
+        async def planner2(**kwargs):
+            memory = kwargs.get("memory") or ""
+            if "denied" in memory or "مجاز نیست" in memory:
+                return {"action": "finish", "answer": "بن اجرا نشد."}
+            return {"action": "call_tool", "tool": "member.ban", "args": {}}
+
+        ctx = AgentContext(
+            chat_id=-1001,
+            chat_type="supergroup",
+            chat_title="Harness Group",
+            admin=AdminIdentity(user_id=42, role=ADMINISTRATOR, display_name="Admin"),
+            bot_capabilities=BotCapabilities(
+                is_admin=True,
+                can_restrict_members=True,
+                can_delete_messages=True,
+                can_pin_messages=True,
+                can_post_messages=False,
+            ),
+            command_text="بن کن همه رو",
+            group_settings=GroupSettings.objects.get(chat_id=-1001),
+        )
+        bot = admin_bot(42)
+        result = async_to_sync(run_investigation)(
+            ctx=ctx,
+            bot=bot,
+            user_text="همه رو بن کن",
+            step_planner=planner2,
+            max_steps=3,
+        )
+        self.assertTrue(result.ok)
+        self.assertTrue(any(o.name == "denied" for o in result.observations))
+        self.assertEqual(bot.banned, [])
