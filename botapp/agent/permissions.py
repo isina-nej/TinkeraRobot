@@ -33,6 +33,8 @@ ROLE_ORDER = {NONE: 0, VIEWER: 1, MODERATOR: 2, ADMINISTRATOR: 3, CREATOR: 4}
 # --- Permissions -------------------------------------------------------------
 
 GROUP_READ = "group.read"
+CHANNEL_READ = "channel.read"
+CHANNEL_POST = "channel.post"
 MEMBERS_READ = "members.read"
 MEMBERS_WARN = "members.warn"
 MEMBERS_RESTRICT = "members.restrict"
@@ -48,14 +50,16 @@ AUDIT_READ = "audit.read"
 # Minimum role required to hold each permission.
 PERMISSION_MIN_ROLE = {
     GROUP_READ: VIEWER,
-    MEMBERS_READ: VIEWER,
+    CHANNEL_READ: VIEWER,
     ANALYTICS_READ: VIEWER,
     AUDIT_READ: VIEWER,
     SETTINGS_READ: VIEWER,
+    MEMBERS_READ: VIEWER,
     MEMBERS_WARN: MODERATOR,
     MEMBERS_RESTRICT: MODERATOR,
     MESSAGES_DELETE: MODERATOR,
     MESSAGES_PIN: MODERATOR,
+    CHANNEL_POST: MODERATOR,
     MESSAGES_BULK_DELETE: ADMINISTRATOR,
     MEMBERS_BAN: ADMINISTRATOR,
     SETTINGS_WRITE: ADMINISTRATOR,
@@ -66,6 +70,7 @@ PERMISSION_MIN_ROLE = {
 CAP_RESTRICT = "can_restrict_members"
 CAP_DELETE = "can_delete_messages"
 CAP_PIN = "can_pin_messages"
+CAP_POST = "can_post_messages"
 
 
 def _env_admin_ids() -> frozenset[int]:
@@ -102,6 +107,7 @@ class BotCapabilities:
     can_restrict_members: bool = False
     can_delete_messages: bool = False
     can_pin_messages: bool = False
+    can_post_messages: bool = False
 
     def has(self, capability: str) -> bool:
         if not capability:
@@ -186,6 +192,8 @@ async def resolve_bot_capabilities(bot, chat_id: int) -> BotCapabilities:
         can_restrict_members=bool(getattr(member, "can_restrict_members", False)),
         can_delete_messages=bool(getattr(member, "can_delete_messages", False)),
         can_pin_messages=bool(getattr(member, "can_pin_messages", False)),
+        # Channel admins expose can_post_messages; groups typically omit it.
+        can_post_messages=bool(getattr(member, "can_post_messages", False)),
     )
 
 
@@ -193,6 +201,7 @@ CAPABILITY_LABELS = {
     CAP_RESTRICT: "Restrict Members",
     CAP_DELETE: "Delete Messages",
     CAP_PIN: "Pin Messages",
+    CAP_POST: "Post Messages",
 }
 
 

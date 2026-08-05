@@ -45,8 +45,20 @@ from .registry import registry
 from .responses import confirmation_preview
 from .risk import HIGH, resolve_risk
 from .schemas import AgentDecision
+from .target_chat import resolve_target_chat
 
 PROTECTED_ACTION_TOOLS = {"member.mute", "member.ban", "member.warn"}
+# These rely on group-member restriction APIs and are not valid in channels.
+_CHANNEL_UNSUPPORTED_TOOLS = frozenset({
+    "member.mute",
+    "member.unmute",
+    "member.ban",
+    "member.unban",
+    "member.warn",
+    "member.get_warnings",
+    "group.lock",
+    "group.unlock",
+})
 
 
 @dataclass
@@ -74,20 +86,26 @@ def _get_group_settings(chat_id: int):
 
 
 async def _build_context(bot, message, command_text: str) -> AgentContext:
-    chat = message.chat
-    identity = await resolve_admin_identity(bot, chat.id, message.from_user)
-    capabilities = await resolve_bot_capabilities(bot, chat.id)
-    group = await _get_group_settings(chat.id)
+    try:
+        target = await resolve_target_chat(bot, message, command_text)
+    except ValueError as exc:
+        raise AgentParseError(str(exc)) from exc
+
+    identity = await resolve_admin_identity(bot, target.chat_id, message.from_user)
+    capabilities = await resolve_bot_capabilities(bot, target.chat_id)
+    group = await _get_group_settings(target.chat_id)
     return AgentContext(
-        chat_id=int(chat.id),
-        chat_type=str(chat.type),
-        chat_title=getattr(chat, "title", "") or "",
+        chat_id=int(target.chat_id),
+        chat_type=target.chat_type or str(message.chat.type),
+        chat_title=target.title or getattr(message.chat, "title", "") or "",
         admin=identity,
         bot_capabilities=capabilities,
-        command_text=command_text,
+        command_text=target.cleaned_command,
         reply=reply_target_from_message(message),
         group_settings=group,
         timezone_name=_setting("TIME_ZONE", ""),
+        request_chat_id=int(message.chat.id),
+        target_source=target.source,
     )
 
 
@@ -153,7 +171,7 @@ def _target_label(ctx: AgentContext) -> str:
 async def handle_admin_command(bot, message, command_text: str, *, ai_provider=None) -> AgentResult:
     started = time.perf_counter()
     request_id = uuid.uuid4().hex
-    chat_id = int(message.chat.id)
+    request_chat_id = int(message.chat.id)
     user_id = int(message.from_user.id)
     command_text = (command_text or "").strip()
 
@@ -161,18 +179,24 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
     if len(command_text) > max_len:
         command_text = command_text[:max_len]
 
+    # Operational chat_id is filled after context resolution (may be remote).
+    state = {"audit_chat_id": request_chat_id, "command_text": command_text}
+
     async def _audit(**kwargs):
         await sync_to_async(record_audit, thread_sensitive=True)(
             request_id=request_id,
-            chat_id=chat_id,
+            chat_id=state["audit_chat_id"],
             requester_user_id=user_id,
-            original_command=command_text,
+            original_command=state["command_text"],
             duration_ms=int((time.perf_counter() - started) * 1000),
             **kwargs,
         )
 
     try:
         ctx = await _build_context(bot, message, command_text)
+        state["audit_chat_id"] = ctx.chat_id
+        command_text = ctx.command_text or command_text
+        state["command_text"] = command_text
         if not ctx.admin.is_admin:
             from .errors import AgentPermissionDenied
 
@@ -180,6 +204,12 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
 
         decision, parser_type = await _decide(ctx, command_text, ai_provider)
         tool = registry.get(decision.tool)
+
+        if ctx.is_channel and tool.name in _CHANNEL_UNSUPPORTED_TOOLS:
+            raise AgentParseError(
+                "❌ این عملیات مخصوص گروه است و در کانال پشتیبانی نمی‌شود.\n"
+                "برای کانال از ابزارهای اطلاعات/آمار/پست/حذف/پین استفاده کنید."
+            )
 
         raw_params = decision.parameters.model_dump()
         raw_params = _resolve_target(tool, ctx, raw_params)
@@ -199,7 +229,8 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
             confirmation, raw_token = await sync_to_async(
                 confirmations.create_confirmation, thread_sensitive=True
             )(
-                chat_id=chat_id,
+                chat_id=ctx.chat_id,
+                request_chat_id=ctx.request_chat_id or request_chat_id,
                 requester_user_id=user_id,
                 requester_name=ctx.admin.display_name,
                 tool_name=tool.name,

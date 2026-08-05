@@ -81,12 +81,27 @@ class FakeBot:
         self.pinned = []
         self.unpinned = []
         self.permissions_set = []
+        self.sent = []
 
     async def me(self):
         return SimpleNamespace(id=self.id, username="testbot", full_name="Test Bot")
 
     async def get_chat(self, chat_id):
-        return SimpleNamespace(id=chat_id, title="Test Group", type="supergroup", username="")
+        if isinstance(chat_id, str) and chat_id.startswith("@"):
+            return SimpleNamespace(
+                id=-100999,
+                title="Remote Channel",
+                type="channel",
+                username=chat_id[1:],
+                description="demo",
+            )
+        return SimpleNamespace(
+            id=int(chat_id),
+            title="Test Group",
+            type="supergroup",
+            username="",
+            description="",
+        )
 
     async def get_chat_member(self, chat_id, user_id):
         if user_id in self._members:
@@ -117,8 +132,13 @@ class FakeBot:
     async def pin_chat_message(self, chat_id, message_id, **kwargs):
         self.pinned.append((chat_id, message_id))
 
-    async def unpin_chat_message(self, chat_id, message_id, **kwargs):
+    async def unpin_chat_message(self, chat_id, message_id=None, **kwargs):
         self.unpinned.append((chat_id, message_id))
+
+    async def send_message(self, chat_id, text, **kwargs):
+        message_id = 9000 + len(self.sent)
+        self.sent.append((chat_id, text, message_id))
+        return SimpleNamespace(message_id=message_id)
 
 
 def admin_bot(requester_id, *, target_id=None, target_admin=False, bot_admin=True):
@@ -129,6 +149,7 @@ def admin_bot(requester_id, *, target_id=None, target_admin=False, bot_admin=Tru
             can_restrict_members=True,
             can_delete_messages=True,
             can_pin_messages=True,
+            can_post_messages=True,
         ),
     }
     if target_id is not None:
@@ -272,6 +293,11 @@ class ParserUnitTests(SimpleTestCase):
     def test_today_summary(self):
         self.assertEqual(parse("آمار فعالیت امروز رو بده").tool, "analytics.get_today_summary")
 
+    def test_period_briefing_and_channel_reads(self):
+        self.assertEqual(parse("آمار هفته رو بده").tool, "analytics.get_period_summary")
+        self.assertEqual(parse("تحلیل کن").tool, "analytics.generate_briefing")
+        self.assertEqual(parse("تعداد مشترکین کانال").tool, "channel.get_subscriber_count")
+
     def test_bot_deleted(self):
         self.assertEqual(
             parse("آخرین پیامی که خود ربات حذف کرده چی بوده؟").tool,
@@ -298,7 +324,7 @@ class ToolRegistryIntegrityTests(SimpleTestCase):
         from botapp.agent.risk import RISK_ORDER
 
         valid_permissions = set(perm.PERMISSION_MIN_ROLE)
-        valid_caps = {None, perm.CAP_RESTRICT, perm.CAP_DELETE, perm.CAP_PIN}
+        valid_caps = {None, perm.CAP_RESTRICT, perm.CAP_DELETE, perm.CAP_PIN, perm.CAP_POST}
         valid_targets = {"none", "member", "message"}
 
         tools = registry.all()
@@ -1034,3 +1060,94 @@ class MessageArchiveTests(TestCase):
         )
         self.assertTrue(result.error)
         self.assertIn("Telegram", result.text)
+
+
+# --- Remote target / channel / briefing --------------------------------------
+
+
+class TargetChatResolutionTests(SimpleTestCase):
+    def test_extract_explicit_chat_ref(self):
+        from botapp.agent.target_chat import extract_explicit_chat_ref
+
+        ref, rest = extract_explicit_chat_ref("@mychannel آمار امروز")
+        self.assertEqual(ref, "@mychannel")
+        self.assertEqual(rest, "آمار امروز")
+        ref, rest = extract_explicit_chat_ref("در کانال @news تحلیل کن")
+        self.assertEqual(ref, "@news")
+        self.assertEqual(rest, "تحلیل کن")
+        ref, rest = extract_explicit_chat_ref("-100123456789 لیست ادمین")
+        self.assertEqual(ref, "-100123456789")
+        self.assertEqual(rest, "لیست ادمین")
+        ref, rest = extract_explicit_chat_ref("تعداد اعضا")
+        self.assertIsNone(ref)
+        self.assertEqual(rest, "تعداد اعضا")
+
+
+class RemoteConfirmationTests(TestCase):
+    def test_confirm_uses_request_chat_not_operational_chat(self):
+        confirmation, raw = confirmations.create_confirmation(
+            chat_id=-100999,
+            request_chat_id=42,
+            requester_user_id=7,
+            requester_name="Admin",
+            tool_name="channel.post_text",
+            validated_parameters={"value": "hello"},
+            human_summary="ارسال پست",
+            risk_level="high",
+        )
+        self.assertEqual(confirmation.request_chat_id, 42)
+        with self.assertRaises(AgentPermissionDenied):
+            confirmations.claim_for_execution(raw, requester_user_id=7, chat_id=-100999)
+        claimed = confirmations.claim_for_execution(raw, requester_user_id=7, chat_id=42)
+        self.assertEqual(claimed.status, AgentConfirmation.STATUS_EXECUTING)
+
+
+class ChannelAndBriefingIntegrationTests(TestCase):
+    def setUp(self):
+        clear_role_cache()
+        GroupSettings.objects.get_or_create(chat_id=-100999, defaults={"chat_title": "Remote Channel"})
+
+    @override_settings(AGENT_ENABLED=True, AGENT_AI_ENABLED=False)
+    def test_private_command_targets_named_channel(self):
+        bot = admin_bot(42)
+        # Admin in private chat targeting @channel for a read tool.
+        msg = make_message("@mychannel تعداد مشترکین", chat_id=42, user_id=42)
+        msg.chat = SimpleNamespace(id=42, type="private", title="")
+        result = async_to_sync(handle_admin_command)(
+            bot, msg, "@mychannel تعداد مشترکین کانال"
+        )
+        self.assertFalse(result.error)
+        self.assertIn("مشترک", result.text)
+
+    @override_settings(AGENT_ENABLED=True, AGENT_AI_ENABLED=False)
+    def test_channel_mute_is_rejected(self):
+        bot = admin_bot(42)
+        msg = make_message("mute", chat_id=-100999, user_id=42, reply_user_id=9)
+        # Force channel context via explicit numeric target that FakeBot marks channel only for @.
+        # Simulate by patching resolved chat type through command on a channel chat.
+        msg.chat = SimpleNamespace(id=-100999, type="channel", title="Remote Channel")
+        result = async_to_sync(handle_admin_command)(bot, msg, "این کاربر رو ساکت کن")
+        self.assertTrue(result.error)
+        self.assertIn("کانال", result.text)
+
+    @override_settings(AGENT_ENABLED=True, AGENT_AI_ENABLED=False)
+    def test_briefing_returns_facts_without_ai(self):
+        bot = admin_bot(42)
+        result = async_to_sync(handle_admin_command)(
+            bot, make_message("x", chat_id=-1001, user_id=42), "تحلیل کن"
+        )
+        self.assertFalse(result.error)
+        self.assertIn("تحلیل", result.text)
+        self.assertIn("داده‌های مبنا", result.text)
+
+    def test_channel_tools_registered(self):
+        for name in (
+            "channel.get_info",
+            "channel.get_subscriber_count",
+            "channel.get_admins",
+            "channel.post_text",
+            "channel.delete_post",
+            "analytics.generate_briefing",
+            "analytics.get_top_moderated_users",
+        ):
+            self.assertTrue(registry.has(name), name)

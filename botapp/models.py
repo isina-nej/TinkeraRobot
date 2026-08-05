@@ -822,7 +822,11 @@ class AgentConfirmation(models.Model):
     )
 
     token_hash = models.CharField(max_length=64, unique=True)
+    # Operational chat (group/channel) where the tool runs.
     chat_id = models.BigIntegerField(db_index=True)
+    # Chat where the confirm/cancel keyboard was shown. Differs from chat_id when
+    # an admin drives the agent from a private chat against a remote target.
+    request_chat_id = models.BigIntegerField(null=True, blank=True, db_index=True)
     request_message_id = models.BigIntegerField(null=True, blank=True)
     confirmation_message_id = models.BigIntegerField(null=True, blank=True)
     requester_user_id = models.BigIntegerField()

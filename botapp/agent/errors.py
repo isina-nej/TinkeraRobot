@@ -19,7 +19,7 @@ class AgentError(Exception):
 
 class AgentPermissionDenied(AgentError):
     code = "permission_denied"
-    user_message = "❌ فقط مدیران گروه می‌توانند از دستیار مدیریتی استفاده کنند."
+    user_message = "❌ فقط مدیران گروه/کانال می‌توانند از دستیار مدیریتی استفاده کنند."
 
 
 class BotCapabilityMissing(AgentError):

@@ -6,6 +6,6 @@ validated decision into calls against the project's *existing* services
 (moderation pipeline, settings models, warning services, etc.).
 """
 
-from . import analytics, audit, group, members, messages, settings  # noqa: F401
+from . import analytics, audit, channel, group, members, messages, settings  # noqa: F401
 
-__all__ = ["analytics", "audit", "group", "members", "messages", "settings"]
+__all__ = ["analytics", "audit", "channel", "group", "members", "messages", "settings"]

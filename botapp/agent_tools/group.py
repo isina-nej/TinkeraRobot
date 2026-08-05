@@ -25,7 +25,8 @@ async def get_member_count(ctx: AgentContext, bot, params) -> str:
         count = await bot.get_chat_member_count(ctx.chat_id)
     except TelegramAPIError as exc:
         raise TelegramOperationError() from exc
-    return f"👥 تعداد اعضای فعلی گروه: {fa_number(count)} نفر"
+    kind = ctx.label()
+    return f"👥 تعداد اعضای فعلی {kind}: {fa_number(count)} نفر"
 
 
 async def get_info(ctx: AgentContext, bot, params) -> str:
@@ -34,8 +35,9 @@ async def get_info(ctx: AgentContext, bot, params) -> str:
         count = await bot.get_chat_member_count(ctx.chat_id)
     except TelegramAPIError as exc:
         raise TelegramOperationError() from exc
+    kind = ctx.label()
     lines = [
-        f"ℹ️ اطلاعات گروه: {getattr(chat, 'title', '') or ctx.chat_title}",
+        f"ℹ️ اطلاعات {kind}: {getattr(chat, 'title', '') or ctx.chat_title}",
         f"شناسه: {fa_number(ctx.chat_id)}",
         f"نوع: {getattr(chat, 'type', ctx.chat_type)}",
         f"تعداد اعضا: {fa_number(count)} نفر",
