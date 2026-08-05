@@ -751,6 +751,53 @@ class CustomEmoji(models.Model):
         ordering = ["name"]
 
 
+class ChatDailyActivity(models.Model):
+    """Lightweight per-day activity counters the bot observes in a chat.
+
+    Always maintained (independent of full MessageSnapshot archival). Counts only
+    messages the bot actually receives after the feature is enabled — Telegram
+    Bot API cannot backfill older history.
+    """
+
+    chat_id = models.BigIntegerField(db_index=True)
+    day = models.DateField(db_index=True)
+    message_count = models.PositiveIntegerField(default=0)
+    media_count = models.PositiveIntegerField(default=0)
+    unique_sender_count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["chat_id", "day"], name="uniq_chat_daily_activity"),
+        ]
+        indexes = [models.Index(fields=["chat_id", "-day"])]
+        ordering = ["-day"]
+
+    def __str__(self):
+        return f"ChatDailyActivity({self.chat_id}:{self.day}={self.message_count})"
+
+
+class ChatDailySender(models.Model):
+    """Per-sender message counts for a chat/day (supports top-poster analytics)."""
+
+    chat_id = models.BigIntegerField(db_index=True)
+    day = models.DateField(db_index=True)
+    user_id = models.BigIntegerField()
+    display_name = models.CharField(max_length=255, blank=True, default="")
+    username = models.CharField(max_length=64, blank=True, default="")
+    message_count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["chat_id", "day", "user_id"],
+                name="uniq_chat_daily_sender",
+            )
+        ]
+        indexes = [models.Index(fields=["chat_id", "day", "-message_count"])]
+
+
 class MessageSnapshot(models.Model):
     """Archive of messages the bot itself received/deleted in a group.
 

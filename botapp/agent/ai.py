@@ -36,6 +36,8 @@ AGENT_SYSTEM_PROMPT = """تو یک تحلیلگر دستور مدیریتی بر
 - اگر chat_kind=channel است، از ابزارهای channel.* یا analytics/audit/read مناسب استفاده کن؛
   mute/ban/lock مخصوص گروه را برای کانال انتخاب نکن.
 - برای «تحلیل/آنالیز/گزارش مدیریتی» از analytics.generate_briefing استفاده کن.
+- برای «چند پیام امروز / تعداد پیام / آمار پیام» از analytics.get_message_activity_today
+  یا analytics.get_message_activity_period استفاده کن — هرگز نگو به API دسترسی نداری.
 - برای ارسال متن به کانال از channel.post_text با parameters.value=متن استفاده کن.
 - خروجی باید دقیقاً این کلیدها را داشته باشد: intent, tool, confidence, risk_level,
   requires_confirmation, parameters, human_summary.

@@ -122,6 +122,83 @@ async def top_moderated_users(ctx: AgentContext, bot, params) -> str:
     return "📊 کاربران با بیشترین اقدام مدیریتی (۷ روز):\n" + "\n".join(lines)
 
 
+@sync_to_async(thread_sensitive=True)
+def _activity_today(chat_id: int):
+    from botapp import activity as activity_svc
+
+    return activity_svc.get_activity(chat_id)
+
+
+@sync_to_async(thread_sensitive=True)
+def _activity_range(chat_id: int, days: int = 7):
+    from botapp import activity as activity_svc
+
+    until = timezone.localdate()
+    since = until - timedelta(days=max(days, 1) - 1)
+    return activity_svc.get_activity_range(chat_id, since, until)
+
+
+@sync_to_async(thread_sensitive=True)
+def _top_senders_today(chat_id: int, limit: int = 10):
+    from botapp import activity as activity_svc
+
+    return activity_svc.get_top_senders(chat_id, limit=limit)
+
+
+async def message_activity_today(ctx: AgentContext, bot, params) -> str:
+    row = await _activity_today(ctx.chat_id)
+    today = timezone.localdate()
+    if row is None or row.message_count == 0:
+        return (
+            f"📨 پیام‌های مشاهده‌شدهٔ امروز ({today.isoformat()}) در این {ctx.label()}: "
+            f"{fa_number(0)}\n\n"
+            "نکته: شمارش از زمانی شروع می‌شود که ربات در چت باشد و قابلیت "
+            "شمارش فعالیت فعال شده باشد. تاریخچهٔ قبل از آن از Bot API قابل "
+            "بازخوانی نیست."
+        )
+    return (
+        f"📨 آمار پیام امروز ({today.isoformat()}) — {ctx.label()}:\n"
+        f"• کل پیام‌ها: {fa_number(row.message_count)}\n"
+        f"• رسانه (عکس/ویدیو/…): {fa_number(row.media_count)}\n"
+        f"• ارسال‌کننده یکتا: {fa_number(row.unique_sender_count)}\n\n"
+        "این اعداد از پیام‌هایی است که خودِ ربات در تلگرام دیده است."
+    )
+
+
+async def message_activity_period(ctx: AgentContext, bot, params) -> str:
+    rows = await _activity_range(ctx.chat_id, 7)
+    if not rows:
+        return (
+            f"📨 در ۷ روز اخیر هنوز پیامی برای این {ctx.label()} شمارش نشده است.\n"
+            "شمارش فقط از زمان فعال‌سازی ربات/قابلیت انجام می‌شود."
+        )
+    total = sum(r.message_count for r in rows)
+    media = sum(r.media_count for r in rows)
+    lines = [
+        f"• {r.day.isoformat()}: {fa_number(r.message_count)} پیام"
+        f" / {fa_number(r.unique_sender_count)} نفر"
+        for r in rows
+    ]
+    return (
+        f"📨 آمار پیام ۷ روز اخیر — {ctx.label()}:\n"
+        f"مجموع: {fa_number(total)} پیام، رسانه: {fa_number(media)}\n\n"
+        + "\n".join(lines)
+    )
+
+
+async def top_senders_today(ctx: AgentContext, bot, params) -> str:
+    rows = await _top_senders_today(ctx.chat_id)
+    if not rows:
+        return "📨 امروز هنوز ارسال‌کننده‌ای شمارش نشده است."
+    lines = []
+    for index, row in enumerate(rows, start=1):
+        name = (row.display_name or "").strip() or (
+            f"@{row.username}" if row.username else str(row.user_id)
+        )
+        lines.append(f"{fa_number(index)}. {name} — {fa_number(row.message_count)} پیام")
+    return "📨 فعال‌ترین ارسال‌کنندگان امروز:\n" + "\n".join(lines)
+
+
 async def _collect_facts(ctx: AgentContext, bot) -> dict:
     facts: dict = {
         "chat_id": ctx.chat_id,
@@ -164,6 +241,27 @@ async def _collect_facts(ctx: AgentContext, bot) -> dict:
         forced = await _forced_membership_snapshot(ctx.chat_id)
         if forced:
             facts["forced_membership"] = forced
+
+    today = await _activity_today(ctx.chat_id)
+    week = await _activity_range(ctx.chat_id, 7)
+    facts["messages_today"] = {
+        "count": int(today.message_count) if today else 0,
+        "media": int(today.media_count) if today else 0,
+        "unique_senders": int(today.unique_sender_count) if today else 0,
+    }
+    facts["messages_7d"] = {
+        "count": sum(int(r.message_count) for r in week),
+        "media": sum(int(r.media_count) for r in week),
+        "days_with_data": len(week),
+    }
+    top_senders = await _top_senders_today(ctx.chat_id, 5)
+    facts["top_senders_today"] = [
+        {
+            "name": (s.display_name or s.username or str(s.user_id)),
+            "count": int(s.message_count),
+        }
+        for s in top_senders
+    ]
     return facts
 
 
@@ -179,6 +277,25 @@ def _facts_as_text(facts: dict) -> str:
         lines.append(f"اعضا/مشترکین: {facts['member_count']}")
     if "admin_count" in facts:
         lines.append(f"تعداد ادمین: {facts['admin_count']}")
+    msg_today = facts.get("messages_today") or {}
+    lines.append(
+        "پیام امروز: "
+        f"{msg_today.get('count', 0)} "
+        f"(رسانه={msg_today.get('media', 0)}, "
+        f"ارسال‌کننده یکتا={msg_today.get('unique_senders', 0)})"
+    )
+    msg_week = facts.get("messages_7d") or {}
+    lines.append(
+        "پیام ۷روز: "
+        f"{msg_week.get('count', 0)} "
+        f"(روزهای دارای داده={msg_week.get('days_with_data', 0)})"
+    )
+    senders = facts.get("top_senders_today") or []
+    if senders:
+        lines.append(
+            "فعال‌ترین‌های امروز: "
+            + ", ".join(f"{row['name']}({row['count']})" for row in senders)
+        )
     settings = facts.get("settings") or {}
     if settings:
         lines.append(
@@ -219,10 +336,10 @@ async def _ai_narrative(facts_text: str) -> str | None:
     url = os.getenv("NOYA_API_URL", "http://127.0.0.1:20128/v1/chat/completions").strip()
     model = os.getenv("AGENT_MODEL", "").strip() or os.getenv("NOYA_MODEL", "TinkeraBot")
     system = (
-        "تو تحلیل‌گر امنیتی/مدیریتی گروه‌ها و کانال‌های تلگرام هستی. "
-        "فقط بر اساس دادهٔ داخل <facts> یک گزارش کوتاه فارسی (حداکثر ۸ خط) بنویس: "
-        "وضعیت کلی، ریسک‌ها، و ۲ پیشنهاد عملی. "
-        "از داده خارج از <facts> چیزی نساز. کد، دستور مخرب یا Secret ننویس."
+        "تو تحلیل‌گر داخلی ربات مدیریت تلگرام هستی و به آمار واقعی دسترسی داری "
+        "(داخل <facts>). گزارش کوتاه فارسی بنویس (حداکثر ۸ خط): وضعیت، ریسک، پیشنهاد. "
+        "هرگز نگو به دیتابیس/API دسترسی نداری و هرگز فایل Export یا اسکریپت پایتون طلب نکن. "
+        "فقط از <facts> استفاده کن."
     )
     user = (
         "بر اساس این حقایق یک تحلیل مدیریتی بنویس:\n"
@@ -256,8 +373,13 @@ async def generate_briefing(ctx: AgentContext, bot, params) -> str:
     facts_text = _facts_as_text(facts)
     narrative = await _ai_narrative(facts_text)
     header = f"🧠 تحلیل {ctx.label()}: {facts.get('title') or ctx.chat_title or ctx.chat_id}"
-    body = narrative or "تحلیل متنی در دسترس نبود؛ خلاصهٔ آماری:"
-    return f"{header}\n\n{body}\n\n——\n📊 داده‌های مبنا:\n{facts_text}"
+    msg_today = facts.get("messages_today") or {}
+    lead = (
+        f"📨 امروز {fa_number(msg_today.get('count', 0))} پیام "
+        f"از {fa_number(msg_today.get('unique_senders', 0))} نفر دیده شد."
+    )
+    body = narrative or "خلاصهٔ آماری آماده است (مدل متنی در دسترس نبود)."
+    return f"{header}\n\n{lead}\n\n{body}\n\n——\n📊 داده‌های مبنا:\n{facts_text}"
 
 
 register_tool(
@@ -288,8 +410,38 @@ register_tool(
     handler=top_moderated_users,
 )
 register_tool(
+    name="analytics.get_message_activity_today",
+    description="تعداد پیام/رسانه/ارسال‌کننده یکتای امروز که ربات در این چت دیده است.",
+    input_schema=EmptyParams,
+    permission=ANALYTICS_READ,
+    risk_level=LOW,
+    requires_confirmation=False,
+    handler=message_activity_today,
+    human_verb="شمارش پیام امروز",
+)
+register_tool(
+    name="analytics.get_message_activity_period",
+    description="آمار پیام ۷ روز اخیر بر اساس شمارندهٔ فعالیت ربات.",
+    input_schema=EmptyParams,
+    permission=ANALYTICS_READ,
+    risk_level=LOW,
+    requires_confirmation=False,
+    handler=message_activity_period,
+    human_verb="آمار پیام هفته",
+)
+register_tool(
+    name="analytics.get_top_senders_today",
+    description="فعال‌ترین ارسال‌کنندگان پیام امروز.",
+    input_schema=EmptyParams,
+    permission=ANALYTICS_READ,
+    risk_level=LOW,
+    requires_confirmation=False,
+    handler=top_senders_today,
+    human_verb="فعال‌ترین‌های امروز",
+)
+register_tool(
     name="analytics.generate_briefing",
-    description="تحلیل مدیریتی گروه/کانال با ترکیب آمار واقعی و خلاصه هوش مصنوعی.",
+    description="تحلیل مدیریتی گروه/کانال با ترکیب آمار پیام واقعی، لاگ مدیریتی و خلاصه هوش مصنوعی.",
     input_schema=EmptyParams,
     permission=ANALYTICS_READ,
     risk_level=LOW,
