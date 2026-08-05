@@ -297,7 +297,11 @@ async def handle_admin_command(bot, message, command_text: str, *, ai_provider=N
     except Exception:  # defensive: never leak internals to the user
         # Log with a full stack trace + request_id for debugging; the user only
         # ever sees a generic message and no technical detail is surfaced.
-        logger.exception("agent command failed request_id=%s chat=%s", request_id, chat_id)
+        logger.exception(
+            "agent command failed request_id=%s chat=%s",
+            request_id,
+            state.get("audit_chat_id", request_chat_id),
+        )
         await _audit(execution_status="failed", error_code="unexpected_error")
         return AgentResult(text="❌ خطای غیرمنتظره‌ای رخ داد.", error=True)
 

@@ -172,6 +172,27 @@ def parse(command: str) -> AgentDecision | None:  # noqa: C901 - flat rule table
         return _decision("analytics.get_today_summary", {}, intent="today_summary", summary="آمار امروز")
     if _has_any(text, "آمار هفته", "آمار هفتگی", "آمار ۷ روز", "آمار 7 روز", "گزارش هفته", "آمار هفت روز"):
         return _decision("analytics.get_period_summary", {}, intent="period_summary", summary="آمار ۷ روز")
+    # Deep / multi-step investigation (ReAct harness) before simple briefing.
+    if _has_any(
+        text,
+        "تحلیل عمیق",
+        "بررسی کامل",
+        "بررسی مرحله",
+        "تحقیق کن",
+        "تحقیق کامل",
+        "با ابزار بررسی",
+        "مرحله به مرحله",
+        "deep analysis",
+        "investigate",
+    ) or (
+        _has_any(text, "بررسی") and _has_any(text, "کامل", "عمیق", "دقیق", "همه‌جانبه", "جامع")
+    ):
+        return _decision(
+            "harness.investigate",
+            {},
+            intent="harness_investigate",
+            summary="بررسی مرحله‌ای گروه/کانال",
+        )
     if _has_any(text, "تحلیل", "آنالیز", "briefing", "گزارش تحلیلی", "وضعیت کلی"):
         # «تحلیل … چند پیام» already matched above; pure analysis → briefing.
         return _decision("analytics.generate_briefing", {}, intent="briefing", summary="تحلیل گروه/کانال")

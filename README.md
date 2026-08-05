@@ -228,6 +228,16 @@ cp .env.example .env
 ابزارهای ویژه کانال: `channel.get_info`، `channel.get_subscriber_count`، `channel.get_admins`، `channel.post_text`، `channel.delete_post`، `channel.pin_post`.  
 ابزار تحلیل: `analytics.generate_briefing` (آمار واقعی + خلاصه AI در صورت در دسترس بودن `NOYA_API_KEY`).
 
+بررسی مرحله‌ای (ReAct harness — چند ابزار خواندنی + در صورت نیاز اجرای پایتون محدود روی دادهٔ جمع‌شده):
+
+```text
+/agent بررسی کامل کن
+/agent تحلیل عمیق گروه
+/agent مرحله به مرحله بررسی کن
+```
+
+ابزار: `harness.investigate`. فقط ابزارهای کم‌ریسک/خواندنی به‌صورت خودکار اجرا می‌شوند؛ عملیات نوشتنی همچنان مسیر تأیید جدا دارند. با `AGENT_HARNESS_AI_ENABLED=false` یک پاس قطعی از ابزارهای آماری اجرا می‌شود (بدون برنامه‌ریز LLM).
+
 شمارش پیام (همیشه روشن، بدون نیاز به آرشیو کامل متن):
 
 ```text
@@ -280,6 +290,9 @@ AGENT_MODEL=
 AGENT_CONFIRMATION_TTL_SECONDS=120
 AGENT_MIN_CONFIDENCE=0.80
 AGENT_MAX_COMMAND_LENGTH=2000
+AGENT_HARNESS_ENABLED=true
+AGENT_HARNESS_AI_ENABLED=true
+AGENT_HARNESS_MAX_STEPS=5
 MESSAGE_ARCHIVE_ENABLED=false
 MESSAGE_ARCHIVE_RETENTION_DAYS=30
 ```
