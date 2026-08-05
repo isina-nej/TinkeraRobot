@@ -13,6 +13,16 @@ ACTION_TYPES = {"lock", "unlock", "mute", "unmute", "ban", "unban"}
 TARGET_REQUIRED = {"mute", "unmute", "ban", "unban"}
 REVERSALS = {"lock": "unlock", "mute": "unmute", "ban": "unban"}
 
+# Idempotency-key namespaces. Internal keys (auto-reversals, daily schedules)
+# live under "sys:" and are reserved. Keys coming from untrusted callers are
+# forced under "ext:" so they can never collide with — and thus pre-book /
+# poison — a reserved internal key (e.g. blocking an automatic unmute/unban or a
+# daily lock by pre-creating a row with that key).
+SYSTEM_KEY_PREFIX = "sys:"
+EXTERNAL_KEY_PREFIX = "ext:"
+_INTERNAL_SOURCES = {"system", "schedule"}
+_KEY_MAX_LENGTH = 80
+
 DEFAULT_MESSAGES = {
     "warn": "به {target} اخطار داده شد ({count}/{max_warnings}).",
     "warning_ceiling": "{target} به سقف اخطار رسید؛ {action} برای او ثبت شد.",
@@ -93,7 +103,16 @@ def create_action(
     if action in {"lock", "unlock"} and target_user_id is not None:
         raise ValueError("group actions cannot have target_user_id")
 
-    key = idempotency_key or uuid.uuid4().hex
+    if idempotency_key:
+        if source in _INTERNAL_SOURCES:
+            # Trusted internal callers already namespace their keys under "sys:".
+            key = idempotency_key
+        else:
+            # Untrusted callers (API, telegram) can never reach the "sys:"
+            # namespace, so they cannot pre-book a reserved reversal/schedule key.
+            key = f"{EXTERNAL_KEY_PREFIX}{idempotency_key}"[:_KEY_MAX_LENGTH]
+    else:
+        key = uuid.uuid4().hex
     existing = ModerationAction.objects.filter(idempotency_key=key).first()
     if existing:
         return existing, False
@@ -158,13 +177,33 @@ def mark_action_executed(action, executed_at=None):
     return complete_action(action, executed_at)[0]
 
 
+# Actions that apply a Telegram restriction. Auto-retrying these after a stale
+# ``processing`` timeout can double-apply the side effect if the first worker
+# already succeeded at Telegram but died before ``complete_action``.
+_SIDE_EFFECT_ACTIONS = frozenset({"mute", "ban", "lock"})
+# Release actions are safer to retry (idempotent-ish at Telegram).
+_RELEASE_ACTIONS = frozenset({"unmute", "unban", "unlock"})
+
+
 def requeue_stale_processing_actions(stale_minutes=10, now=None):
+    """Recover stuck ``processing`` rows without double-applying restrictions.
+
+    * ``mute`` / ``ban`` / ``lock`` → marked ``failed`` (manual review / re-issue).
+    * ``unmute`` / ``unban`` / ``unlock`` → requeued to ``pending``.
+    """
     now = now or timezone.now()
     cutoff = now - timedelta(minutes=max(stale_minutes, 1))
-    return ModerationAction.objects.filter(
-        status="processing",
-        started_at__lt=cutoff,
-    ).update(status="pending", started_at=None, error="requeued after stale processing timeout")
+    stale = ModerationAction.objects.filter(status="processing", started_at__lt=cutoff)
+    failed = stale.filter(action__in=_SIDE_EFFECT_ACTIONS).update(
+        status="failed",
+        error="stale processing timeout; not auto-retried to avoid double Telegram side effects",
+    )
+    requeued = stale.filter(action__in=_RELEASE_ACTIONS).update(
+        status="pending",
+        started_at=None,
+        error="requeued after stale processing timeout",
+    )
+    return failed + requeued
 
 
 def mark_action_failed(action, error):
@@ -196,7 +235,7 @@ def create_reversal(action, executed_at=None):
         actor_name=action.actor_name,
         reason=f"automatic release for action {action.id}",
         delay_minutes=action.duration_minutes,
-        idempotency_key=f"reverse:{action.id}",
+        idempotency_key=f"{SYSTEM_KEY_PREFIX}reverse:{action.id}",
         source="system",
     )[0]
 
@@ -218,7 +257,7 @@ def enqueue_daily_group_schedules(now=None):
             action=schedule.action,
             actor_user_id=schedule.created_by_user_id,
             reason="daily group schedule",
-            idempotency_key=f"daily:{schedule.id}:{today.isoformat()}",
+            idempotency_key=f"{SYSTEM_KEY_PREFIX}daily:{schedule.id}:{today.isoformat()}",
             source="schedule",
         )
         schedule.last_enqueued_date = today

@@ -37,11 +37,16 @@ def confirmation_preview(
     duration_minutes: int | None = None,
     delay_minutes: int = 0,
     reason: str = "",
+    value=None,
     requester_name: str = "",
     group_name: str = "",
     risk_level: str = "medium",
 ) -> str:
     lines = ["⚠️ تأیید عملیات مدیریتی", "", f"عملیات: {verb}"]
+    if value is not None and str(value) != "":
+        # Show the exact free-text/numeric value so the admin approves precisely
+        # what will be applied (defends against injected/ambiguous values).
+        lines.append(f"مقدار: {value}")
     if target_label:
         lines.append(f"کاربر: {target_label}")
     if target_user_id is not None:

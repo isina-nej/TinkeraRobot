@@ -6,13 +6,20 @@ from django.middleware.csrf import CsrfViewMiddleware
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from botapp.models import GroupSettings, ModerationAction
+from botapp.models import GroupSettings, ModerationAction, StaffAPIKey
 from botapp.moderation import (
     ACTION_TYPES,
     authenticate_api_key,
     cancel_action,
     create_action,
 )
+
+
+def _actor_allows_chat(actor, chat_id: int) -> bool:
+    """Staff sessions are unrestricted; API keys honor optional chat_id allowlists."""
+    if isinstance(actor, StaffAPIKey):
+        return actor.allows_chat(chat_id)
+    return True
 
 
 def _json_body(request):
@@ -75,6 +82,8 @@ def group_settings_api(request, chat_id):
         chat_id = int(chat_id)
     except (TypeError, ValueError):
         return JsonResponse({"error": "invalid chat_id"}, status=400)
+    if not _actor_allows_chat(request.api_actor, chat_id):
+        return JsonResponse({"error": "chat_id not allowed for this API key"}, status=403)
     group = GroupSettings.objects.filter(chat_id=chat_id).first()
     if request.method == "GET":
         if not group:
@@ -127,6 +136,8 @@ def create_action_api(request):
         if action_type not in ACTION_TYPES:
             raise ValueError("unsupported action")
         chat_id = int(body["chat_id"])
+        if not _actor_allows_chat(request.api_actor, chat_id):
+            return JsonResponse({"error": "chat_id not allowed for this API key"}, status=403)
         group, _ = GroupSettings.objects.get_or_create(chat_id=chat_id)
         actor = request.api_actor
         actor_id = getattr(actor, "id", None)
@@ -155,15 +166,19 @@ def action_detail_api(request, action_id):
     action = ModerationAction.objects.select_related("group").filter(pk=action_id).first()
     if not action:
         return JsonResponse({"error": "action not found"}, status=404)
+    if not _actor_allows_chat(request.api_actor, action.group.chat_id):
+        return JsonResponse({"error": "chat_id not allowed for this API key"}, status=403)
     return JsonResponse(_action_json(action))
 
 
 @require_http_methods(["POST"])
 @api_authenticated
 def cancel_action_api(request, action_id):
-    action = ModerationAction.objects.filter(pk=action_id).first()
+    action = ModerationAction.objects.select_related("group").filter(pk=action_id).first()
     if not action:
         return JsonResponse({"error": "action not found"}, status=404)
+    if not _actor_allows_chat(request.api_actor, action.group.chat_id):
+        return JsonResponse({"error": "chat_id not allowed for this API key"}, status=403)
     try:
         cancel_action(action)
     except ValueError as exc:

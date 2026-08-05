@@ -241,6 +241,9 @@ class StaffAPIKey(models.Model):
     prefix = models.CharField(max_length=12, db_index=True)
     key_hash = models.CharField(max_length=64, unique=True)
     is_active = models.BooleanField(default=True)
+    # Empty list = unrestricted (legacy single-tenant keys). When non-empty,
+    # the REST API only allows the listed Telegram chat_id values.
+    allowed_chat_ids = models.JSONField(default=list, blank=True)
     created_by = models.ForeignKey(
         "auth.User",
         on_delete=models.SET_NULL,
@@ -251,6 +254,22 @@ class StaffAPIKey(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     last_used_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
+
+    def allows_chat(self, chat_id: int) -> bool:
+        allowed = self.allowed_chat_ids or []
+        if not allowed:
+            return True
+        try:
+            target = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        for value in allowed:
+            try:
+                if int(value) == target:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
 
 class ModerationLog(models.Model):
     ACTIONS = (

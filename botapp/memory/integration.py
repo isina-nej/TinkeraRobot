@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 
@@ -15,6 +16,12 @@ logger = logging.getLogger("botapp.memory")
 BEGIN_MEMORY = "[BEGIN MEMORY CONTEXT]"
 END_MEMORY = "[END MEMORY CONTEXT]"
 EMPTY_CONTEXT = MemoryContext(text="", token_count=0, items=())
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff\u2060\u00ad]")
+_MEMORY_MARKER_RE = re.compile(
+    r"\[BEGIN MEMORY CONTEXT\]|\[END MEMORY CONTEXT\]|"
+    r"<\|system\|>|<\|assistant\|>|<\|user\|>",
+    re.IGNORECASE,
+)
 
 
 def _enabled(name: str, default: bool = True) -> bool:
@@ -116,13 +123,9 @@ async def prepare_memory_context(message, query: str) -> MemoryContext:
 
 
 def _safe_memory_text(memory_text: str) -> str:
-    return (
-        memory_text.replace(BEGIN_MEMORY, "[MEMORY MARKER REMOVED]")
-        .replace(END_MEMORY, "[MEMORY MARKER REMOVED]")
-        .replace("<|system|>", "[ROLE MARKER REMOVED]")
-        .replace("<|assistant|>", "[ROLE MARKER REMOVED]")
-        .replace("<|user|>", "[ROLE MARKER REMOVED]")
-    )
+    """Strip role/memory markers even when obfuscated with case or zero-width chars."""
+    text = _ZERO_WIDTH_RE.sub("", memory_text or "")
+    return _MEMORY_MARKER_RE.sub("[MARKER REMOVED]", text)
 
 
 def append_memory_context(question: str, memory_text: str) -> str:

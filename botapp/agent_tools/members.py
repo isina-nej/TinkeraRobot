@@ -10,7 +10,7 @@ from __future__ import annotations
 from aiogram.exceptions import TelegramAPIError
 
 from botapp.agent.context import AgentContext
-from botapp.agent.errors import TelegramOperationError
+from botapp.agent.errors import ProtectedTarget, TelegramOperationError
 from botapp.agent.permissions import (
     CAP_RESTRICT,
     MEMBERS_BAN,
@@ -24,6 +24,23 @@ from botapp.agent.risk import HIGH, LOW, MEDIUM
 from botapp.agent.schemas import MuteParams, TargetParams
 
 from ._common import actor_from_context, target_namespace
+
+
+async def _target_is_protected(ctx: AgentContext, bot, user_id: int) -> bool:
+    """True if the target is the bot itself or a group admin.
+
+    Fails CLOSED: if the admin status cannot be determined, treat the target as
+    protected so a moderation action is never taken against a possible admin.
+    """
+    from botapp.telegram_gateway import is_chat_admin
+
+    try:
+        me = await bot.me()
+        if int(user_id) == int(me.id):
+            return True
+        return await is_chat_admin(bot, ctx.chat_id, int(user_id))
+    except Exception:
+        return True
 
 
 async def get_info(ctx: AgentContext, bot, params: TargetParams) -> str:
@@ -87,6 +104,12 @@ async def unban(ctx: AgentContext, bot, params: TargetParams) -> str:
 
 async def warn(ctx: AgentContext, bot, params: TargetParams) -> str:
     from botapp.services import add_warning, create_moderation_log
+
+    # Backstop admin/bot protection: warn runs at confirm time, where the
+    # orchestrator's pre-execution target check does not re-run. mute/ban are
+    # already guarded inside queue_or_execute, but warn writes directly.
+    if await _target_is_protected(ctx, bot, params.target_user_id):
+        raise ProtectedTarget("❌ کاربر هدف ادمین گروه است و نمی‌توان به او اخطار داد.")
 
     group = ctx.group_settings
     target_label = str(params.target_user_id)

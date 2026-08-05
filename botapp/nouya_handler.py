@@ -2,11 +2,17 @@ import random
 import re
 
 from aiogram import F, Router, types
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
 from botapp.services import call_noya_api
 
 router = Router()
+
+# Persian-aware word boundary around «نویا». The previous pattern used a literal
+# ``\\b`` string (backslash-b), so the mention handler never matched.
+_NOYA_NAME_RE = re.compile(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", re.IGNORECASE)
+_AI_PREFIX_RE = re.compile(r"^(?:نویا|noya|nuya|noia|nuia)(?:\s|\u200c)", re.IGNORECASE)
 
 
 def _guest_question(message: types.Message, bot_username: str = "") -> str:
@@ -27,12 +33,12 @@ def _channel_question(text: str, bot_username: str = "") -> str | None:
         bot_username
         and re.search(rf"@{re.escape(bot_username)}\b", text, flags=re.IGNORECASE)
     )
-    name_call = bool(re.search(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", text, flags=re.IGNORECASE))
+    name_call = bool(_NOYA_NAME_RE.search(text))
     if not (mention or name_call):
         return None
     if bot_username:
         text = re.sub(rf"@{re.escape(bot_username)}\b", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", "", text, flags=re.IGNORECASE)
+    text = _NOYA_NAME_RE.sub("", text)
     return text.strip() or "به این پست پاسخ بده."
 
 
@@ -82,15 +88,23 @@ RESPONSES = [
 ]
 
 
-@router.message(F.text.regexp(r"\\bنویا\\b", flags=re.IGNORECASE))
+@router.message(F.text.regexp(_NOYA_NAME_RE))
 async def nouya_mention_handler(message: types.Message):
-    # Avoid triggering on commands or mentions of the bot itself
-    if message.text.startswith("/") or f"@{message.bot.id}" in message.text:
-        return
+    """Ack bare «نویا» mentions; never compete with the main AI / agent path."""
+    text = (message.text or "").strip()
+    if text.startswith("/"):
+        raise SkipHandler()
 
-    # Check if the bot is mentioned by its username
     bot_user = await message.bot.get_me()
-    if bot_user.username and f"@{bot_user.username}" in message.text.lower():
-        return
+    username = (bot_user.username or "").lower()
+    if username and f"@{username}" in text.lower():
+        raise SkipHandler()
+
+    # Prefix + question (or reply-to-bot) belongs to handle_text_message / agent.
+    if _AI_PREFIX_RE.match(text):
+        raise SkipHandler()
+    replied = getattr(message, "reply_to_message", None)
+    if replied and getattr(replied, "from_user", None) and replied.from_user.id == bot_user.id:
+        raise SkipHandler()
 
     await message.reply(random.choice(RESPONSES))

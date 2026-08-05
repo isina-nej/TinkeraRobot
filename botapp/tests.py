@@ -37,6 +37,7 @@ from botapp.moderation import (
     create_reversal,
     enqueue_daily_group_schedules,
     render_group_message,
+    requeue_stale_processing_actions,
     validate_action_spec,
     warning_ceiling_spec,
 )
@@ -148,11 +149,17 @@ class ModerationRulesTest(TestCase):
         assert contains_blocked_word("این BAD Word است", ["bad word"]) is True
         assert contains_blocked_word("پیام سالم", ["bad"]) is False
 
+    def test_blocked_words_ignore_zero_width_and_extra_spaces(self):
+        assert contains_blocked_word("این ba\u200bd word است", ["bad word"]) is True
+        assert contains_blocked_word("بد   کلمه", ["بد کلمه"]) is True
+
     def test_url_extraction_and_domain_allowlist(self):
         assert extract_urls("ببین https://sub.example.com/a و www.bad.test/x") == [
             "https://sub.example.com/a",
             "www.bad.test/x",
         ]
+        assert "t.me/example" in extract_urls("عضو شوید t.me/example همین الان")
+        assert "evil.com" in extract_urls("سایت evil.com را ببین")
         assert is_allowed_url("https://sub.example.com/a", ["example.com"]) is True
         assert is_allowed_url("https://fakeexample.com", ["example.com"]) is False
 
@@ -310,6 +317,41 @@ class ScheduledModerationTest(TestCase):
         assert reversal.target_user_id == 1
         assert reversal.execute_at > timezone.now()
 
+    def test_external_key_cannot_poison_reversal(self):
+        action, _ = create_action(
+            group=self.group,
+            action="mute",
+            target_user_id=7,
+            duration_minutes=30,
+        )
+        # An untrusted caller tries to pre-book the internal reversal key so the
+        # automatic unmute would silently be skipped (leaving the user muted).
+        create_action(
+            group=self.group, action="lock",
+            idempotency_key=f"sys:reverse:{action.id}", source="api",
+        )
+        create_action(
+            group=self.group, action="lock",
+            idempotency_key=f"reverse:{action.id}", source="api",
+        )
+        reversal = create_reversal(action, timezone.now())
+        assert reversal is not None
+        assert reversal.action == "unmute"
+        assert reversal.target_user_id == 7
+
+    def test_external_key_cannot_poison_daily_schedule(self):
+        schedule = GroupSchedule.objects.create(
+            group=self.group, action="lock", time_of_day=time(8, 0),
+        )
+        now = timezone.make_aware(datetime(2026, 7, 22, 8, 1))
+        create_action(
+            group=self.group, action="unlock",
+            idempotency_key=f"sys:daily:{schedule.id}:{now.date().isoformat()}",
+            source="api",
+        )
+        assert enqueue_daily_group_schedules(now) == 1
+        assert self.group.actions.filter(action="lock", source="schedule").count() == 1
+
     def test_cancel_only_pending_action(self):
         action, _ = create_action(group=self.group, action="lock")
         cancel_action(action)
@@ -428,6 +470,43 @@ class ModerationApiTest(TestCase):
         assert response.status_code == 400
         self.group.refresh_from_db()
         assert self.group.max_warnings_action_duration_minutes != 0
+
+    def test_api_key_chat_scope_blocks_other_groups(self):
+        key, raw = create_api_key("scoped", self.staff)
+        key.allowed_chat_ids = [-400]
+        key.save(update_fields=["allowed_chat_ids"])
+        allowed = self.client.get(
+            reverse("group-settings-api", args=[-400]),
+            HTTP_X_API_KEY=raw,
+        )
+        denied = self.client.get(
+            reverse("group-settings-api", args=[-401]),
+            HTTP_X_API_KEY=raw,
+        )
+        assert allowed.status_code == 200
+        assert denied.status_code == 403
+
+
+class StaleProcessingRequeueTest(TestCase):
+    def setUp(self):
+        self.group = GroupSettings.objects.create(chat_id=-501)
+
+    def test_side_effect_actions_fail_closed_release_actions_requeue(self):
+        now = timezone.now()
+        stale = now - timedelta(minutes=30)
+        ban, _ = create_action(group=self.group, action="ban", target_user_id=9, source="telegram")
+        unlock, _ = create_action(group=self.group, action="unlock", source="telegram")
+        ModerationAction.objects.filter(pk__in=[ban.pk, unlock.pk]).update(
+            status="processing",
+            started_at=stale,
+        )
+        changed = requeue_stale_processing_actions(stale_minutes=10, now=now)
+        ban.refresh_from_db()
+        unlock.refresh_from_db()
+        assert changed == 2
+        assert ban.status == "failed"
+        assert unlock.status == "pending"
+        assert unlock.started_at is None
 
 
 class ChatLinkTest(TestCase):

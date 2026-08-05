@@ -7,7 +7,14 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-DEBUG = os.getenv("DEBUG", "true").lower() in {"1", "true", "yes", "on"}
+# DEBUG default: when unset, stay local-friendly for SQLite and secure-by-default
+# for non-SQLite (typical production). Explicit DEBUG= always wins.
+_debug_env = os.getenv("DEBUG")
+if _debug_env is None:
+    _db_engine = os.getenv("DB_ENGINE", "django.db.backends.sqlite3")
+    DEBUG = _db_engine.endswith("sqlite3")
+else:
+    DEBUG = _debug_env.lower() in {"1", "true", "yes", "on"}
 SECRET_KEY = os.getenv(
     "DJANGO_SECRET_KEY",
     "django-insecure-development-only-change-me",
@@ -97,6 +104,7 @@ MEMORY_SHORT_TERM_TTL_HOURS = int(os.getenv("SHORT_TERM_TTL_HOURS", "24"))
 MEMORY_MEDIUM_TERM_TTL_DAYS = int(os.getenv("MEDIUM_TERM_TTL_DAYS", "14"))
 MEMORY_LONG_TERM_TTL_DAYS = int(os.getenv("LONG_TERM_TTL_DAYS", "60"))
 MEMORY_MAX_CONTEXT_TOKENS = int(os.getenv("MEMORY_MAX_CONTEXT_TOKENS", "600"))
+MEMORY_MAX_ITEMS_PER_SCOPE = int(os.getenv("MEMORY_MAX_ITEMS_PER_SCOPE", "200"))
 MEMORY_EXTRACTION_ENABLED = os.getenv("MEMORY_EXTRACTION_ENABLED", "true").lower() in {
     "1", "true", "yes", "on"
 }
