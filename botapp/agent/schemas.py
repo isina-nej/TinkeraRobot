@@ -119,3 +119,14 @@ class MessageTargetParams(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     message_id: int = Field(ge=1)
+
+
+class TextContentParams(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    value: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("value")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return (value or "").strip()[:4000]

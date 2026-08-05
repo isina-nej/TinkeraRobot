@@ -40,6 +40,16 @@ class AgentContext:
     group_settings: Any | None = None
     timezone_name: str = ""
     now: datetime = field(default_factory=timezone.now)
+    # Chat where the admin issued the command (private UI vs operational chat).
+    request_chat_id: int | None = None
+    target_source: str = "current"
+
+    @property
+    def is_channel(self) -> bool:
+        return "channel" in str(self.chat_type).lower()
+
+    def label(self) -> str:
+        return "کانال" if self.is_channel else "گروه"
 
     def ai_payload(self, tool_catalog: list[dict]) -> dict:
         """Redacted context sent to the model. No secrets, no cross-group data."""
@@ -58,12 +68,15 @@ class AgentContext:
         return {
             "chat_id": self.chat_id,
             "chat_type": self.chat_type,
+            "chat_kind": "channel" if "channel" in str(self.chat_type).lower() else "group",
+            "request_chat_id": self.request_chat_id,
             "admin_user_id": self.admin.user_id,
             "admin_role": self.admin.role,
             "bot_permissions": {
                 "can_restrict_members": self.bot_capabilities.can_restrict_members,
                 "can_delete_messages": self.bot_capabilities.can_delete_messages,
                 "can_pin_messages": self.bot_capabilities.can_pin_messages,
+                "can_post_messages": self.bot_capabilities.can_post_messages,
             },
             "reply_target": (
                 {

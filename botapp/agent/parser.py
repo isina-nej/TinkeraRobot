@@ -134,10 +134,24 @@ def parse(command: str) -> AgentDecision | None:  # noqa: C901 - flat rule table
     # --- Read-only: analytics / audit ----------------------------------------
     if _has_any(text, "آمار امروز", "آمار فعالیت امروز", "فعالیت امروز", "آمار روز"):
         return _decision("analytics.get_today_summary", {}, intent="today_summary", summary="آمار امروز")
+    if _has_any(text, "آمار هفته", "آمار هفتگی", "آمار ۷ روز", "آمار 7 روز", "گزارش هفته", "آمار هفت روز"):
+        return _decision("analytics.get_period_summary", {}, intent="period_summary", summary="آمار ۷ روز")
+    if _has_any(text, "تحلیل", "آنالیز", "briefing", "گزارش تحلیلی", "وضعیت کلی"):
+        return _decision("analytics.generate_briefing", {}, intent="briefing", summary="تحلیل گروه/کانال")
+    if _has_any(text, "بیشترین تخلف", "بیشترین اخطار", "کاربران پرریسک", "تاپ متخلف", "بیشترین اقدام"):
+        return _decision("analytics.get_top_moderated_users", {}, intent="top_moderated", summary="کاربران پرتکرار مدیریتی")
     if "حذف" in text and _has_any(text, "ربات", "بات") and _has_any(text, "آخرین", "کرده", "چی", "کدوم", "لیست"):
         return _decision("message.get_bot_deleted_recent", {}, intent="bot_deleted_recent", summary="آخرین پیام‌های حذف‌شده توسط ربات")
     if _has_any(text, "آخرین عملیات", "آخرین اقدام", "تاریخچه عملیات", "گزارش عملیات", "لاگ عملیات", "آخرین عملیات مدیریتی"):
         return _decision("audit.get_recent_actions", {}, intent="recent_actions", summary="آخرین عملیات مدیریتی")
+
+    # --- Channel-specific reads ----------------------------------------------
+    if _has_any(text, "اطلاعات کانال", "مشخصات کانال", "درباره کانال"):
+        return _decision("channel.get_info", {}, intent="channel_info", summary="اطلاعات کانال")
+    if _has_any(text, "تعداد مشترک", "چند مشترک", "چندتا مشترک", "سابسکرایبر", "subscriber"):
+        return _decision("channel.get_subscriber_count", {}, intent="channel_subscribers", summary="تعداد مشترکین کانال")
+    if _has_any(text, "ادمین کانال", "ادمین‌های کانال", "ادمینهای کانال"):
+        return _decision("channel.get_admins", {}, intent="channel_admins", summary="ادمین‌های کانال")
 
     # --- Member warnings (read) ----------------------------------------------
     if _has_any(text, "اخطارها", "اخطار های", "چند اخطار", "تعداد اخطار") and not _has_any(text, "بده", "بزن", "حداکثر", "سقف"):

@@ -67,6 +67,11 @@ def can_transition(current: str, target: str) -> bool:
     return target in VALID_TRANSITIONS.get(current, set())
 
 
+def _ui_chat_id(confirmation: AgentConfirmation) -> int:
+    """Chat that owns the confirm/cancel keyboard (may differ from operational chat)."""
+    return int(confirmation.request_chat_id or confirmation.chat_id)
+
+
 def create_confirmation(
     *,
     chat_id: int,
@@ -78,12 +83,14 @@ def create_confirmation(
     risk_level: str,
     target_user_id: int | None = None,
     request_message_id: int | None = None,
+    request_chat_id: int | None = None,
     ttl_seconds: int = 120,
 ) -> tuple[AgentConfirmation, str]:
     raw = generate_token()
     confirmation = AgentConfirmation.objects.create(
         token_hash=hash_token(raw),
         chat_id=chat_id,
+        request_chat_id=request_chat_id if request_chat_id is not None else chat_id,
         requester_user_id=requester_user_id,
         requester_name=requester_name[:255],
         tool_name=tool_name,
@@ -101,7 +108,7 @@ def create_confirmation(
 def claim_for_execution(raw_token: str, *, requester_user_id: int, chat_id: int) -> AgentConfirmation:
     """Atomically transition a pending confirmation to ``executing``.
 
-    Enforces ownership, chat scoping, expiry and single-use. Raises a domain
+    Enforces ownership, UI-chat scoping, expiry and single-use. Raises a domain
     error otherwise. The row is locked for the duration of the transaction so
     concurrent clicks cannot both succeed.
     """
@@ -112,7 +119,7 @@ def claim_for_execution(raw_token: str, *, requester_user_id: int, chat_id: int)
     )
     if confirmation is None:
         raise ConfirmationAlreadyHandled("❌ این درخواست معتبر نیست یا قبلاً پردازش شده است.")
-    if confirmation.chat_id != chat_id or confirmation.requester_user_id != requester_user_id:
+    if _ui_chat_id(confirmation) != chat_id or confirmation.requester_user_id != requester_user_id:
         raise AgentPermissionDenied("❌ فقط درخواست‌دهنده می‌تواند این عملیات را تأیید کند.")
     if confirmation.status != AgentConfirmation.STATUS_PENDING:
         raise ConfirmationAlreadyHandled()
@@ -138,7 +145,7 @@ def cancel_confirmation(raw_token: str, *, requester_user_id: int, chat_id: int)
     )
     if confirmation is None:
         raise ConfirmationAlreadyHandled("❌ این درخواست معتبر نیست یا قبلاً پردازش شده است.")
-    if confirmation.chat_id != chat_id or confirmation.requester_user_id != requester_user_id:
+    if _ui_chat_id(confirmation) != chat_id or confirmation.requester_user_id != requester_user_id:
         raise AgentPermissionDenied("❌ فقط درخواست‌دهنده می‌تواند این عملیات را لغو کند.")
     if confirmation.status != AgentConfirmation.STATUS_PENDING:
         raise ConfirmationAlreadyHandled()

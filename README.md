@@ -211,6 +211,23 @@ cp .env.example .env
 
 در هر دو حالت کاربران عادی هرگز نمی‌توانند این تریگرها را فعال کنند، عملیات ناشناخته/کم‌اطمینان اجرا نمی‌شود، و پیام Replyشده فقط به‌عنوان داده‌ی غیرقابل اعتماد وارد Context می‌شود. فرمان‌های قطعی موجود (mute، ban، حذف، قفل و…) و فرمان‌های بدون اسلش و `/prompt` بدون تغییر کار می‌کنند.
 
+### مدیریت و تحلیل گروه/کانال (از داخل چت یا پیوی)
+
+- **داخل گروه:** مثل قبل دستور بدهید (`/agent تحلیل کن`, `/agent آمار هفته`).
+- **از پیوی ربات:** گروه/کانال هدف را در ابتدای دستور بنویسید یا یک پیام از آن چت را فوروارد کنید:
+
+```text
+/agent @mychannel آمار امروز
+/agent @mychannel تحلیل کن
+/agent -100123456789 لیست ادمین‌ها
+/agent @mychannel یک پست با متن «سلام» بفرست
+```
+
+ربات باید در کانال/گروه هدف **عضو** باشد و برای عملیات نوشتن، **ادمین با دسترسی لازم** باشد. عملیات حساس همچنان تأیید شیشه‌ای می‌خواهند؛ دکمه‌های تأیید در همان چتی که دستور را زده‌اید نشان داده می‌شوند (حتی اگر هدف یک کانال دیگر باشد).
+
+ابزارهای ویژه کانال: `channel.get_info`، `channel.get_subscriber_count`، `channel.get_admins`، `channel.post_text`، `channel.delete_post`، `channel.pin_post`.  
+ابزار تحلیل: `analytics.generate_briefing` (آمار واقعی + خلاصه AI در صورت در دسترس بودن `NOYA_API_KEY`).
+
 ### جریان اجرا
 
 `Trigger → Admin Verification → Deterministic Parser → (AI Structured Parser) → Schema Validation → Registry Lookup → App Permission → Bot Capability → Target Resolution → Risk → Confirmation → Existing-Service Execution → Audit → Persian Response`

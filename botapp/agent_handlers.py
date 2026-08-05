@@ -84,7 +84,15 @@ class AgentTriggerFilter(BaseFilter):
     async def __call__(self, message: Message, bot) -> bool | dict:
         if not _agent_enabled():
             return False
-        if not message.text or message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        # Groups/supergroups: in-place admin commands.
+        # Private: remote manage/analyze of a named or forwarded target chat.
+        # Channels: rarely interactive; still allow if an admin posts a command.
+        if not message.text or message.chat.type not in {
+            ChatType.GROUP,
+            ChatType.SUPERGROUP,
+            ChatType.PRIVATE,
+            ChatType.CHANNEL,
+        }:
             return False
         stripped = message.text.lstrip()
         lowered = stripped.casefold()
@@ -94,20 +102,40 @@ class AgentTriggerFilter(BaseFilter):
         if admin_command is not None:
             if not admin_command.strip():
                 return False
-            identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
-            if not identity.is_admin:
-                return False
+            # Cheap gate: in private, ADMIN_IDS or later target-chat admin check
+            # inside the orchestrator is authoritative. Here we only require the
+            # sender to look like an admin of *this* chat when not private.
+            if message.chat.type != ChatType.PRIVATE:
+                identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
+                if not identity.is_admin:
+                    return False
+            else:
+                identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
+                if not identity.is_admin:
+                    # Still allow private if the command embeds a target; the
+                    # orchestrator will verify adminship on the resolved chat.
+                    from botapp.agent.target_chat import extract_explicit_chat_ref
+
+                    ref, _ = extract_explicit_chat_ref(admin_command)
+                    if ref is None and not getattr(message, "reply_to_message", None):
+                        return False
             return {"agent_command": admin_command}
 
         # 2) Plain trigger — agent only for a recognised deterministic intent.
         command = _strip_prefix(stripped, lowered, _NOYA_PREFIXES)
         if not command:
             return False
-        if deterministic_parse(command) is None:
+        # Strip a leading chat ref so deterministic parse sees the real intent.
+        from botapp.agent.target_chat import extract_explicit_chat_ref
+
+        _, remainder = extract_explicit_chat_ref(command)
+        parse_text = remainder or command
+        if deterministic_parse(parse_text) is None:
             return False
-        identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
-        if not identity.is_admin:
-            return False
+        if message.chat.type != ChatType.PRIVATE:
+            identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
+            if not identity.is_admin:
+                return False
         return {"agent_command": command}
 
 
@@ -138,8 +166,14 @@ async def _dispatch(message: Message, command: str) -> None:
         return
     if not command.strip():
         await message.reply(
-            "استفاده: دستور مدیریتی را بعد از /agent بنویسید. مثال:\n"
-            "/agent تعداد اعضای گروه چقدره؟"
+            "استفاده: دستور مدیریتی را بعد از /agent بنویسید.\n\n"
+            "در گروه:\n"
+            "/agent تعداد اعضا چقدره؟\n"
+            "/agent تحلیل کن\n\n"
+            "از پیوی برای کانال/گروه دیگر:\n"
+            "/agent @mychannel آمار امروز\n"
+            "/agent @mychannel تحلیل کن\n"
+            "/agent -100123456789 لیست ادمین‌ها"
         )
         return
 
