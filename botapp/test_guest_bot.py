@@ -59,10 +59,11 @@ class GuestBotTest(SimpleTestCase):
         answer_guest_query.assert_awaited_once()
         progress = answer_guest_query.await_args.kwargs["result"]
         self.assertEqual(progress.type, "article")
-        self.assertEqual(progress.input_message_content.message_text, "در حال بررسی…")
+        self.assertEqual(progress.input_message_content.message_text, "یک لحظه…")
         edit_message_text.assert_awaited_once_with(
             inline_message_id="inline-123",
             text="سلام، من نویا هستم.",
+            parse_mode="HTML",
         )
 
     def test_channel_question_targets_mention_or_name_only(self):
@@ -91,8 +92,11 @@ class GuestBotTest(SimpleTestCase):
             "سلام",
             session_id="telegram:channel:-100:77",
         )
-        message.reply.assert_awaited_once_with("در حال بررسی…")
-        message.reply.return_value.edit_text.assert_awaited_once_with("پاسخ کانال")
+        message.reply.assert_awaited_once_with("یک لحظه…")
+        message.reply.return_value.edit_text.assert_awaited_once_with(
+            "پاسخ کانال",
+            parse_mode="HTML",
+        )
 
     def test_guest_update_observer_is_registered(self):
         self.assertIn("guest_message", router.resolve_used_update_types())

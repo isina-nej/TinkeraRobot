@@ -436,6 +436,19 @@ def is_group_chat(message: Message) -> bool:
     return message.chat.type in {ChatType.GROUP, ChatType.SUPERGROUP}
 
 
+def is_private_chat(message: Message) -> bool:
+    return message.chat.type == ChatType.PRIVATE
+
+
+async def reply_noya_answer(message: Message, answer: str) -> None:
+    """Send Noya's reply; prefer HTML so creator text-mentions stay clickable."""
+    text = (answer or "").strip() or "…"
+    try:
+        await message.reply(text, parse_mode="HTML")
+    except TelegramBadRequest:
+        await message.reply(text)
+
+
 def is_bot_mentioned(message: Message, bot_username: str) -> bool:
     if not bot_username:
         return False
@@ -1154,7 +1167,7 @@ async def prompt(message: Message, command: CommandObject):
             call_noya_api,
             session_id=f"telegram:{chat.id}",
         )
-        await message.reply(answer)
+        await reply_noya_answer(message, answer)
         return
 
     # Group /prompt must honor the same collaboration + daily quota gates as @mention.
@@ -1175,7 +1188,7 @@ async def prompt(message: Message, command: CommandObject):
         call_noya_api,
         session_id=f"telegram:{chat.id}",
     )
-    await message.reply(answer)
+    await reply_noya_answer(message, answer)
 
 
 @router.message(Command("new"))
@@ -1484,8 +1497,67 @@ async def is_group_admin(chat_id: int, user_id: int, bot: Bot) -> bool:
         return False
 
 
+_NOYA_PREFIXES = ("نویا", "noya", "nuya", "noia", "nuia")
+_NOYA_NAME_RE = re.compile(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", re.IGNORECASE)
+
+
+def _noya_question_from_text(text: str, bot_username: str = "") -> str | None:
+    """Return question text if this message is addressing Noya; else None."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    for prefix in _NOYA_PREFIXES:
+        if lowered.startswith(prefix):
+            rest = raw[len(prefix):].lstrip(" \t,،:.-")
+            return rest or "سلام"
+    if bot_username:
+        mention = f"@{bot_username}".lower()
+        if lowered.startswith(mention):
+            rest = raw[len(mention):].lstrip(" \t,،:.-")
+            return rest or "سلام"
+    # Mid-sentence name call: «سازنده‌ات کیه نویا»
+    if _NOYA_NAME_RE.search(raw):
+        rest = _NOYA_NAME_RE.sub(" ", raw)
+        rest = re.sub(r"\s+", " ", rest).strip(" \t,،:.-")
+        return rest or "سلام"
+    return None
+
+
+async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool) -> None:
+    if use_quota:
+        if not await consume_group_quota(message.chat.id, message.chat.title or ""):
+            await message.reply(
+                f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
+            )
+            return
+    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    answer = await run_ai_with_memory(
+        message,
+        question,
+        call_noya_api,
+        session_id=f"telegram:{message.chat.id}",
+    )
+    await reply_noya_answer(message, answer)
+
+
 @router.message(F.text & ~F.command)
 async def handle_text_message(message: Message, bot: Bot):
+    if not message.text:
+        return
+
+    bot_info = await bot.me()
+    bot_username = bot_info.username or ""
+
+    # Private chat: any non-command text is a conversation with Noya.
+    # No group-admin requirement; user only needs to have started the bot.
+    if is_private_chat(message):
+        question = _noya_question_from_text(message.text, bot_username) or message.text.strip()
+        if not question:
+            return
+        await _answer_noya_chat(message, question, use_quota=False)
+        return
+
     if not is_group_chat(message):
         return
 
@@ -1493,57 +1565,26 @@ async def handle_text_message(message: Message, bot: Bot):
     if await process_moderation(message, bot, group):
         return
 
-    if not message.text:
-        return
-
-    text_lower = message.text.lower().strip()
-    bot_info = await bot.me()
-    bot_mention = f"@{bot_info.username}".lower()
-    
-    # Check if the message is invoking Noya
+    # Explicit Noya address / reply-to-bot:
+    # Works for any member (no group-admin check). Bot itself does not need to be
+    # group admin either — Telegram must deliver the update (@mention / reply /
+    # or privacy-mode disabled so "نویا …" reaches the bot).
     is_noya = False
-    question = ""
-    
-    if text_lower.startswith("نویا"):
+    question = _noya_question_from_text(message.text, bot_username) or ""
+    if question:
         is_noya = True
-        question = message.text[4:].strip()
-    elif text_lower.startswith("noya"):
-        is_noya = True
-        question = message.text[4:].strip()
-    elif text_lower.startswith("nuya"):
-        is_noya = True
-        question = message.text[4:].strip()
-    elif text_lower.startswith("noia"):
-        is_noya = True
-        question = message.text[4:].strip()
-    elif text_lower.startswith("nuia"):
-        is_noya = True
-        question = message.text[4:].strip()
-    elif text_lower.startswith(bot_mention):
-        is_noya = True
-        question = message.text[len(bot_mention):].strip()
-    elif message.reply_to_message and message.reply_to_message.from_user.id == bot_info.id:
-        # Replying directly to the bot
+    elif (
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == bot_info.id
+    ):
         is_noya = True
         question = message.text.strip()
 
     if is_noya and question:
-        # Same gates as the @mention path — prefix/reply must not bypass them.
         if not group.collaboration_enabled:
             return
-        if not await consume_group_quota(message.chat.id, message.chat.title or ""):
-            await message.reply(
-                f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
-            )
-            return
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-        answer = await run_ai_with_memory(
-            message,
-            question,
-            call_noya_api,
-            session_id=f"telegram:{message.chat.id}",
-        )
-        await message.reply(answer)
+        await _answer_noya_chat(message, question, use_quota=True)
         return
 
     command_name, args = plain_command(message.text)
@@ -1581,7 +1622,7 @@ async def handle_text_message(message: Message, bot: Bot):
         call_ai_api,
         session_id=f"telegram:{message.chat.id}",
     )
-    await message.reply(answer)
+    await reply_noya_answer(message, answer)
 
 
 @router.chat_member()
