@@ -187,10 +187,27 @@ async def record_processed_message(message) -> bool:
         return False
 
 
+def _speaker_from_message(message) -> tuple[int | None, str]:
+    user = getattr(message, "from_user", None)
+    if user is None or getattr(user, "is_bot", False):
+        return None, ""
+    user_id = getattr(user, "id", None)
+    try:
+        speaker_user_id = int(user_id) if user_id is not None else None
+    except (TypeError, ValueError):
+        speaker_user_id = None
+    speaker_name = (
+        getattr(user, "full_name", None)
+        or getattr(user, "username", None)
+        or ""
+    )
+    return speaker_user_id, str(speaker_name)[:80]
+
+
 async def run_ai_with_memory(
     message,
     question: str,
-    provider: Callable[[str, str], Awaitable[str]],
+    provider: Callable[..., Awaitable[str]],
     session_id: str,
 ) -> str:
     start_total = time.perf_counter()
@@ -200,7 +217,18 @@ async def run_ai_with_memory(
     retrieval_ms = (time.perf_counter() - t0) * 1000
 
     t1 = time.perf_counter()
-    answer = await provider(append_memory_context(question, context.text), session_id)
+    enriched = append_memory_context(question, context.text)
+    speaker_user_id, speaker_name = _speaker_from_message(message)
+    try:
+        answer = await provider(
+            enriched,
+            session_id,
+            speaker_user_id=speaker_user_id,
+            speaker_name=speaker_name,
+        )
+    except TypeError:
+        # Test doubles / older providers that only accept (question, session_id).
+        answer = await provider(enriched, session_id)
     ai_request_ms = (time.perf_counter() - t1) * 1000
 
     ingestion_ms = 0
