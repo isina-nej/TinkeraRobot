@@ -184,7 +184,7 @@ cp .env.example .env
 پرامپت سیستمی اصلی شخصیت «نویا» در مسیر زیر قرار دارد:
 `botapp/ai/prompts.py`
 
-- **نسخه پرامپت**: `NOYA_SYSTEM_PROMPT_VERSION = "v3"`
+- **نسخه پرامپت**: `NOYA_SYSTEM_PROMPT_VERSION = "v4"` (شخصیت لوس / بانمک / نازی / کمی پررو و لجباز)
 - **نحوه اتصال:** در فایل `botapp/services.py` از تابع `build_ai_messages` استفاده شده تا پرامپت دقیقاً در نقش `system` و قبل از متون کاربر و Context حافظه به `Payload` اضافه‌شود.
 - **هویت سازنده:** `NOYA_CREATOR_IDS` (مثلاً `1399836576`) + `NOYA_CREATOR_NAME` / `NOYA_CREATOR_USERNAME`. وقتی کسی می‌پرسد سازنده‌اش کیست، باید با منشن HTML (`tg://user?id=…`) به همان نفر اشاره کند. بلوک `[SPEAKER]` نقش `creator|user` را مشخص می‌کند.
 - **چت پیوی:** هر متن غیر‌دستوری در گفت‌وگوی خصوصی با نویا جواب داده می‌شود (نیازی به `/prompt` نیست).

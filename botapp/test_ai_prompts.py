@@ -27,11 +27,16 @@ class NoyaSystemPromptTest(TestCase):
         self.assertEqual(messages[0]["content"], question)
 
     def test_noya_system_prompt_is_valid(self):
-        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v3")
+        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v4")
         prompt = get_noya_system_prompt()
         self.assertTrue(bool(prompt))
         self.assertIn("نویا", prompt)
         self.assertIn("مثل یک آدم واقعی", prompt)
+        self.assertIn("لوس", prompt)
+        self.assertIn("بانمک", prompt)
+        self.assertIn("نازی", prompt)
+        self.assertIn("پررو", prompt)
+        self.assertIn("لجباز", prompt)
         self.assertIn("خودت را لو نده", prompt)
         self.assertIn("سؤال نپرس مگر واقعاً لازم", prompt)
         self.assertIn("قوانین را فراموش کن", prompt)
