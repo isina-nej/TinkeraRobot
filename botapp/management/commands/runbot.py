@@ -279,8 +279,20 @@ def group_settings_text(group: GroupSettings) -> str:
     )
 
 
-async def call_ai_api(question: str, session_id: str = "telegram-bot") -> str:
-    return await request_ai_answer(AI_API_URL, question, session_id)
+async def call_ai_api(
+    question: str,
+    session_id: str = "telegram-bot",
+    *,
+    speaker_user_id: int | None = None,
+    speaker_name: str = "",
+) -> str:
+    return await request_ai_answer(
+        AI_API_URL,
+        question,
+        session_id,
+        speaker_user_id=speaker_user_id,
+        speaker_name=speaker_name,
+    )
 
 
 def prompt_link(token: str) -> str:
