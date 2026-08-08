@@ -3,16 +3,25 @@ import re
 
 from aiogram import F, Router, types
 from aiogram.dispatcher.event.bases import SkipHandler
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
+from botapp.memory.integration import run_ai_with_memory
 from botapp.services import call_noya_api
 
 router = Router()
 
-# Persian-aware word boundary around «نویا». The previous pattern used a literal
-# ``\\b`` string (backslash-b), so the mention handler never matched.
+# Persian-aware word boundary around «نویا».
 _NOYA_NAME_RE = re.compile(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", re.IGNORECASE)
 _AI_PREFIX_RE = re.compile(r"^(?:نویا|noya|nuya|noia|nuia)(?:\s|\u200c)", re.IGNORECASE)
+
+
+async def _reply_html(message: types.Message, text: str) -> None:
+    body = (text or "").strip() or "…"
+    try:
+        await message.reply(body, parse_mode="HTML")
+    except TelegramBadRequest:
+        await message.reply(body)
 
 
 def _guest_question(message: types.Message, bot_username: str = "") -> str:
@@ -48,12 +57,15 @@ async def channel_nouya_handler(message: types.Message):
     question = _channel_question(message.text or "", bot_user.username or "")
     if question is None:
         return
-    progress = await message.reply("در حال بررسی…")
+    progress = await message.reply("یک لحظه…")
     answer = await call_noya_api(
         question,
         session_id=f"telegram:channel:{message.chat.id}:{message.message_id}",
     )
-    await progress.edit_text(answer)
+    try:
+        await progress.edit_text(answer, parse_mode="HTML")
+    except TelegramBadRequest:
+        await progress.edit_text(answer)
 
 
 @router.guest_message()
@@ -67,17 +79,25 @@ async def guest_nouya_handler(message: types.Message):
     progress = InlineQueryResultArticle(
         id="noya-guest-progress",
         title="Noya",
-        input_message_content=InputTextMessageContent(message_text="در حال بررسی…"),
+        input_message_content=InputTextMessageContent(message_text="یک لحظه…"),
     )
     sent = await message.answer_guest_query(result=progress)
     answer = await call_noya_api(
         question,
         session_id=f"telegram:guest:{message.chat.id}:{message.message_id}",
     )
-    await message.bot.edit_message_text(
-        inline_message_id=sent.inline_message_id,
-        text=answer,
-    )
+    try:
+        await message.bot.edit_message_text(
+            inline_message_id=sent.inline_message_id,
+            text=answer,
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        await message.bot.edit_message_text(
+            inline_message_id=sent.inline_message_id,
+            text=answer,
+        )
+
 
 RESPONSES = [
     "جان؟",
@@ -91,7 +111,7 @@ RESPONSES = [
 
 @router.message(F.text.regexp(_NOYA_NAME_RE))
 async def nouya_mention_handler(message: types.Message):
-    """Ack bare «نویا» mentions; never compete with the main AI / agent path."""
+    """Handle bare/mid-sentence «نویا» mentions that the main prefix path missed."""
     text = (message.text or "").strip()
     if text.startswith("/"):
         raise SkipHandler()
@@ -101,11 +121,25 @@ async def nouya_mention_handler(message: types.Message):
     if username and f"@{username}" in text.lower():
         raise SkipHandler()
 
-    # Prefix + question (or reply-to-bot) belongs to handle_text_message / agent.
+    # Prefix path belongs to handle_text_message.
     if _AI_PREFIX_RE.match(text):
         raise SkipHandler()
     replied = getattr(message, "reply_to_message", None)
     if replied and getattr(replied, "from_user", None) and replied.from_user.id == bot_user.id:
         raise SkipHandler()
+
+    # If there is a real question around the name, answer with Noya AI.
+    question = _NOYA_NAME_RE.sub(" ", text).strip(" \t,،:.-")
+    question = re.sub(r"\s+", " ", question).strip()
+    if question:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+        answer = await run_ai_with_memory(
+            message,
+            question,
+            call_noya_api,
+            session_id=f"telegram:{message.chat.id}",
+        )
+        await _reply_html(message, answer)
+        return
 
     await message.reply(random.choice(RESPONSES))
