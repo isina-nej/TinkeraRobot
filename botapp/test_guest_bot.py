@@ -64,6 +64,7 @@ class GuestBotTest(SimpleTestCase):
         call_ai.assert_awaited_once_with(
             "سلام",
             session_id="telegram:guest:-100:42",
+            images=None,
         )
         answer_guest_query.assert_awaited_once()
         progress = answer_guest_query.await_args.kwargs["result"]
@@ -100,6 +101,7 @@ class GuestBotTest(SimpleTestCase):
         call_ai.assert_awaited_once_with(
             "سلام",
             session_id="telegram:channel:-100:77",
+            images=None,
         )
         message.reply.assert_awaited_once_with("یک لحظه…")
         message.reply.return_value.edit_text.assert_awaited_once_with(

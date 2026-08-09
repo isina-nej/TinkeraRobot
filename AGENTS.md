@@ -65,3 +65,8 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   parent reply when Telegram provides it, and a short in-memory recent-chat buffer
   filled by `ArchiveMiddleware` (works even if `MESSAGE_ARCHIVE_ENABLED=false`).
   Telegram cannot backfill older history the bot never received.
+- Noya vision: photos/stickers are downloaded via Bot API, stickers normalized to
+  JPEG (`botapp/telegram_media.py`, needs Pillow), and sent as OpenAI-style
+  `image_url` data URLs. Optional `NOYA_VISION_MODEL` overrides `NOYA_MODEL` only
+  when images are attached. On the current 9router stack, `NoyaBest`, `fast`,
+  `gemini/*`, `sina-pro`, and several `gc/gemini-*` aliases accept vision.

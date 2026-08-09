@@ -217,6 +217,7 @@ async def call_noya_api(
     *,
     speaker_user_id: int | None = None,
     speaker_name: str = "",
+    images: list[dict] | None = None,
 ) -> str:
     api_key = os.getenv("NOYA_API_KEY", "").strip()
     if not api_key:
@@ -224,21 +225,27 @@ async def call_noya_api(
         return "خطا در ارتباط با نویا. لطفاً دوباره تلاش کنید."
 
     url = os.getenv("NOYA_API_URL", "http://127.0.0.1:20128/v1/chat/completions").strip()
+    # Prefer a vision-capable override when images are attached; NoyaBest already
+    # supports multimodal on the current 9router stack, so default stays NOYA_MODEL.
+    model = os.getenv("NOYA_MODEL", "TinkeraBot").strip()
+    if images:
+        model = os.getenv("NOYA_VISION_MODEL", model).strip() or model
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": os.getenv("NOYA_MODEL", "TinkeraBot").strip(),
+        "model": model,
         "stream": False,
         "messages": build_ai_messages(
             question,
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
+            images=images,
         ),
     }
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -255,6 +262,7 @@ async def call_ai_api(
     *,
     speaker_user_id: int | None = None,
     speaker_name: str = "",
+    images: list[dict] | None = None,
 ) -> str:
     payload = {
         "sessionId": session_id,
@@ -262,6 +270,7 @@ async def call_ai_api(
             question,
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
+            images=images,
         ),
     }
     try:

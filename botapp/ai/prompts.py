@@ -219,8 +219,12 @@ def build_ai_messages(
     *,
     speaker_user_id: int | None = None,
     speaker_name: str = "",
+    images: list[dict] | None = None,
 ) -> list[dict]:
+    """Build chat messages. ``images`` items need ``mime`` + ``data`` (bytes)."""
     from django.conf import settings
+
+    from botapp.telegram_media import to_data_url
 
     messages: list[dict] = []
     if getattr(settings, "NOYA_SYSTEM_PROMPT_ENABLED", True):
@@ -233,5 +237,24 @@ def build_ai_messages(
     )
     if speaker:
         user_content = f"{speaker}\n\n{user_content}"
-    messages.append({"role": "user", "content": user_content})
+
+    vision_parts: list[dict] = []
+    for img in images or []:
+        data = img.get("data")
+        mime = (img.get("mime") or "image/jpeg").strip() or "image/jpeg"
+        if not data:
+            continue
+        vision_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": to_data_url(mime, data)},
+            }
+        )
+
+    if vision_parts:
+        content: list[dict] | str = [{"type": "text", "text": user_content or "این تصویر را ببین و پاسخ بده."}]
+        content.extend(vision_parts)
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": user_content})
     return messages

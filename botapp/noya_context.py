@@ -63,7 +63,17 @@ def remember_group_message(message) -> None:
         return
     text = _body(message)
     if not text:
-        return
+        if getattr(message, "photo", None):
+            text = "[عکس]"
+        elif getattr(message, "sticker", None):
+            emoji = getattr(message.sticker, "emoji", None) or ""
+            text = f"[استیکر{(' ' + emoji) if emoji else ''}]"
+        elif getattr(message, "document", None) and (
+            (getattr(message.document, "mime_type", None) or "").startswith("image/")
+        ):
+            text = "[تصویر]"
+        else:
+            return
     chat = message.chat
     mid = int(getattr(message, "message_id", 0) or 0)
     line = f"{_sender_label(message)}: {text[:_LINE_MAX]}"
