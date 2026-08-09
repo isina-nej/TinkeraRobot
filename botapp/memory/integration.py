@@ -209,6 +209,8 @@ async def run_ai_with_memory(
     question: str,
     provider: Callable[..., Awaitable[str]],
     session_id: str,
+    *,
+    images: list[dict] | None = None,
 ) -> str:
     start_total = time.perf_counter()
     
@@ -225,10 +227,19 @@ async def run_ai_with_memory(
             session_id,
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
+            images=images,
         )
     except TypeError:
         # Test doubles / older providers that only accept (question, session_id).
-        answer = await provider(enriched, session_id)
+        try:
+            answer = await provider(
+                enriched,
+                session_id,
+                speaker_user_id=speaker_user_id,
+                speaker_name=speaker_name,
+            )
+        except TypeError:
+            answer = await provider(enriched, session_id)
     ai_request_ms = (time.perf_counter() - t1) * 1000
 
     ingestion_ms = 0

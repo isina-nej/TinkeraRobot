@@ -70,6 +70,7 @@ from botapp.memory.commands import (
 )
 from botapp.memory.integration import run_ai_with_memory
 from botapp.noya_context import build_noya_user_payload
+from botapp.telegram_media import collect_noya_images
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
 from botapp.agent_handlers import ArchiveMiddleware, router as agent_router
@@ -459,23 +460,25 @@ def is_bot_mentioned(message: Message, bot_username: str) -> bool:
         if replied_user and replied_user.username == bot_username:
             return True
 
-    if message.text:
+    body = message.text or message.caption or ""
+    if body:
         pattern = rf'@{re.escape(bot_username)}'
-        if re.search(pattern, message.text):
+        if re.search(pattern, body, flags=re.IGNORECASE):
             return True
 
     return False
 
 
 def extract_question_from_mention(message: Message, bot_username: str) -> str:
-    if not message.text:
+    body = message.text or message.caption or ""
+    if not body:
         return ""
 
     if not bot_username:
-        return message.text
+        return body
 
     pattern = rf'@{re.escape(bot_username)}\s*'
-    question = re.sub(pattern, '', message.text).strip()
+    question = re.sub(pattern, '', body, flags=re.IGNORECASE).strip()
 
     return question
 
@@ -1538,14 +1541,24 @@ async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool)
         bot_username = me.username or ""
     except Exception:
         bot_username = ""
+    images = []
+    try:
+        images = await collect_noya_images(message.bot, message)
+    except Exception:
+        logger.exception("Failed collecting Noya vision images chat=%s", message.chat.id)
+        images = []
+    ask = (question or "").strip()
+    if images and not ask:
+        ask = "این تصویر / استیکر را ببین و پاسخ بده."
     # Attach reply-chain + recent group chatter so Noya can read the chat/tag target.
-    payload = build_noya_user_payload(message, question, bot_username=bot_username)
+    payload = build_noya_user_payload(message, ask, bot_username=bot_username)
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     answer = await run_ai_with_memory(
         message,
         payload,
         call_noya_api,
         session_id=f"telegram:{message.chat.id}",
+        images=images or None,
     )
     await reply_noya_answer(message, answer)
 
@@ -1591,15 +1604,25 @@ async def handle_text_message(message: Message, bot: Bot):
         question = message.text.strip()
 
     replied_body = ""
+    replied_has_media = False
     if message.reply_to_message:
         replied_body = (
             message.reply_to_message.text
             or message.reply_to_message.caption
             or ""
         ).strip()
+        replied = message.reply_to_message
+        replied_has_media = bool(
+            replied.photo
+            or replied.sticker
+            or (
+                replied.document
+                and (replied.document.mime_type or "").startswith("image/")
+            )
+        )
     # Bare «نویا» / @bot while replying to a message still counts — she should
     # read that message (and its parent reply) even without an extra question.
-    if is_noya and not question and replied_body:
+    if is_noya and not question and (replied_body or replied_has_media):
         question = "به این پیام توجه کن و پاسخ بده."
     if is_noya and question:
         if not group.collaboration_enabled:
@@ -1632,6 +1655,61 @@ async def handle_text_message(message: Message, bot: Bot):
     if not question:
         await message.reply("سوال خود را بنویسید.")
         return
+    await _answer_noya_chat(message, question, use_quota=True)
+
+
+def _is_noya_image_document(message: Message) -> bool:
+    doc = message.document
+    if not doc:
+        return False
+    mime = (doc.mime_type or "").lower()
+    return mime.startswith("image/")
+
+
+@router.message(F.photo | F.sticker | F.document)
+async def handle_media_noya_message(message: Message, bot: Bot):
+    """Private/group photo & sticker input for Noya (stickers normalized to JPEG)."""
+    if message.sticker is None and message.photo is None and not _is_noya_image_document(message):
+        return
+
+    bot_info = await bot.me()
+    bot_username = bot_info.username or ""
+    caption = (message.caption or "").strip()
+    default_ask = "این تصویر / استیکر را ببین و پاسخ بده."
+
+    if is_private_chat(message):
+        question = _noya_question_from_text(caption, bot_username) or caption or default_ask
+        await _answer_noya_chat(message, question, use_quota=False)
+        return
+
+    if not is_group_chat(message):
+        return
+
+    group = await get_or_create_group_settings(message.chat.id, message.chat.title or "")
+    if await process_moderation(message, bot, group):
+        return
+    if not group.collaboration_enabled:
+        return
+
+    is_noya = False
+    question = _noya_question_from_text(caption, bot_username) or ""
+    if question:
+        is_noya = True
+    elif (
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == bot_info.id
+    ):
+        is_noya = True
+        question = caption or default_ask
+    elif is_bot_mentioned(message, bot_username):
+        is_noya = True
+        question = extract_question_from_mention(message, bot_username) or default_ask
+
+    if not is_noya:
+        return
+    if not question:
+        question = default_ask
     await _answer_noya_chat(message, question, use_quota=True)
 
 

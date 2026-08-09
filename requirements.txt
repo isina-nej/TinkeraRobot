@@ -1,6 +1,7 @@
 aiogram>=3.22,<4
 django==5.2.16
 httpx==0.28.1
+Pillow>=10.0,<12
 # Used directly by the admin agent for strict structured-output validation.
 # Pinned range matches what aiogram 3.x depends on; declared explicitly so we
 # do not rely on a transitive dependency.

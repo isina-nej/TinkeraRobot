@@ -9,6 +9,7 @@ from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 from botapp.memory.integration import run_ai_with_memory
 from botapp.noya_context import build_noya_user_payload, strip_bot_address
 from botapp.services import call_noya_api
+from botapp.telegram_media import collect_noya_images
 
 router = Router()
 
@@ -53,16 +54,19 @@ def _channel_question(text: str, bot_username: str = "") -> str | None:
     return text.strip() or "به این پست پاسخ بده."
 
 
-@router.channel_post(F.text)
+@router.channel_post(F.text | F.caption)
 async def channel_nouya_handler(message: types.Message):
     bot_user = await message.bot.get_me()
-    question = _channel_question(message.text or "", bot_user.username or "")
+    body = message.text or message.caption or ""
+    question = _channel_question(body, bot_user.username or "")
     if question is None:
         return
+    images = await collect_noya_images(message.bot, message)
     progress = await message.reply("یک لحظه…")
     answer = await call_noya_api(
         question,
         session_id=f"telegram:channel:{message.chat.id}:{message.message_id}",
+        images=images or None,
     )
     try:
         await progress.edit_text(answer, parse_mode="HTML")
@@ -78,6 +82,7 @@ async def guest_nouya_handler(message: types.Message):
     question = _guest_question(message, bot_user.username or "")
     if not question:
         question = "به پیام اشاره‌شده پاسخ بده."
+    images = await collect_noya_images(message.bot, message)
     progress = InlineQueryResultArticle(
         id="noya-guest-progress",
         title="Noya",
@@ -87,6 +92,7 @@ async def guest_nouya_handler(message: types.Message):
     answer = await call_noya_api(
         question,
         session_id=f"telegram:guest:{message.chat.id}:{message.message_id}",
+        images=images or None,
     )
     try:
         await message.bot.edit_message_text(
@@ -137,18 +143,31 @@ async def nouya_mention_handler(message: types.Message):
     replied_body = (
         getattr(replied, "text", None) or getattr(replied, "caption", None) or ""
     ).strip()
-    if question or replied_body:
+    replied_has_media = bool(
+        replied
+        and (
+            getattr(replied, "photo", None)
+            or getattr(replied, "sticker", None)
+            or (
+                getattr(replied, "document", None)
+                and ((getattr(replied.document, "mime_type", None) or "").startswith("image/"))
+            )
+        )
+    )
+    if question or replied_body or replied_has_media:
         payload = build_noya_user_payload(
             message,
             question,
             bot_username=bot_user.username or "",
         )
+        images = await collect_noya_images(message.bot, message)
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         answer = await run_ai_with_memory(
             message,
             payload,
             call_noya_api,
             session_id=f"telegram:{message.chat.id}",
+            images=images or None,
         )
         await _reply_html(message, answer)
         return
