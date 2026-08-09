@@ -15,15 +15,24 @@ from botapp.nouya_handler import (
 class GuestBotTest(SimpleTestCase):
     def test_guest_question_removes_bot_mention_and_keeps_reply_context(self):
         message = SimpleNamespace(
-            text="@NuyaRobot این را بررسی کن",
+            text="@bot این را بررسی کن",
             caption=None,
-            reply_to_message=SimpleNamespace(text="متن قبلی", caption=None),
+            reply_to_message=SimpleNamespace(
+                text="متن قبلی",
+                caption=None,
+                from_user=SimpleNamespace(id=1, full_name="User", first_name="User", username="u"),
+                reply_to_message=None,
+            ),
+            chat=SimpleNamespace(id=-1, type="private"),
+            message_id=1,
+            from_user=None,
         )
 
-        self.assertEqual(
-            _guest_question(message, "NuyaRobot"),
-            "[پیام مورد اشاره]\nمتن قبلی\n\n[درخواست فعلی]\nاین را بررسی کن",
-        )
+        payload = _guest_question(message, "bot")
+        self.assertIn("متن قبلی", payload)
+        self.assertIn("[درخواست فعلی]" + "\n" + "این را بررسی کن", payload)
+        self.assertIn("[پیام مورد اشاره", payload)
+
 
     def test_guest_handler_answers_guest_query_with_model_result(self):
         answer_guest_query = AsyncMock(

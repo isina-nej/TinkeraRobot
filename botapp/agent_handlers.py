@@ -37,6 +37,7 @@ from botapp.agent.permissions import resolve_admin_identity
 from botapp import activity
 from botapp import agent_tools  # noqa: F401  (registers tools into the registry)
 from botapp import message_archive
+from botapp.noya_context import remember_group_message
 
 logger = logging.getLogger("botapp.agent")
 
@@ -282,4 +283,11 @@ class ArchiveMiddleware(BaseMiddleware):
                     await sync_to_async(message_archive.archive_message, thread_sensitive=True)(event)
                 except Exception:  # archival must never break message handling
                     logger.debug("message archival failed", exc_info=True)
-        return await handler(event, data)
+        # Run handlers first so Noya's "recent chat" buffer excludes the current ask.
+        result = await handler(event, data)
+        if isinstance(event, Message):
+            try:
+                remember_group_message(event)
+            except Exception:  # context buffer must never break message handling
+                logger.debug("noya recent buffer failed", exc_info=True)
+        return result
