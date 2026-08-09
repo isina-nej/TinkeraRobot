@@ -60,3 +60,8 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   «تحلیل عمیق» route there; plain «تحلیل کن» still uses `analytics.generate_briefing`.
   Toggle with `AGENT_HARNESS_ENABLED` / `AGENT_HARNESS_AI_ENABLED` (deterministic
   read-tool pass when AI planner is off).
+- Group Noya chat context (`botapp/noya_context.py`): when someone addresses Noya
+  (name / @mention / reply), the model payload includes the replied message, one
+  parent reply when Telegram provides it, and a short in-memory recent-chat buffer
+  filled by `ArchiveMiddleware` (works even if `MESSAGE_ARCHIVE_ENABLED=false`).
+  Telegram cannot backfill older history the bot never received.

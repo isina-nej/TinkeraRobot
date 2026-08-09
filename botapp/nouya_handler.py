@@ -7,6 +7,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
 from botapp.memory.integration import run_ai_with_memory
+from botapp.noya_context import build_noya_user_payload, strip_bot_address
 from botapp.services import call_noya_api
 
 router = Router()
@@ -26,14 +27,15 @@ async def _reply_html(message: types.Message, text: str) -> None:
 
 def _guest_question(message: types.Message, bot_username: str = "") -> str:
     text = message.text or message.caption or ""
-    if bot_username:
-        text = re.sub(rf"@{re.escape(bot_username)}\b", "", text, flags=re.IGNORECASE)
-    text = text.strip()
-    replied = getattr(message, "reply_to_message", None)
-    replied_text = getattr(replied, "text", None) or getattr(replied, "caption", None)
-    if replied_text:
-        text = f"[پیام مورد اشاره]\n{replied_text}\n\n[درخواست فعلی]\n{text}"
-    return text.strip()
+    ask = strip_bot_address(text, bot_username) if bot_username else text.strip()
+    if not ask and bot_username:
+        ask = re.sub(rf"@{re.escape(bot_username)}\b", "", text, flags=re.IGNORECASE).strip()
+    return build_noya_user_payload(
+        message,
+        ask or text.strip(),
+        bot_username=bot_username,
+        include_recent=False,
+    )
 
 
 def _channel_question(text: str, bot_username: str = "") -> str | None:
@@ -128,14 +130,23 @@ async def nouya_mention_handler(message: types.Message):
     if replied and getattr(replied, "from_user", None) and replied.from_user.id == bot_user.id:
         raise SkipHandler()
 
-    # If there is a real question around the name, answer with Noya AI.
+    # If there is a real question around the name — or a reply/tag target —
+    # answer with Noya AI so she can read that message (+ parent reply).
     question = _NOYA_NAME_RE.sub(" ", text).strip(" \t,،:.-")
     question = re.sub(r"\s+", " ", question).strip()
-    if question:
+    replied_body = (
+        getattr(replied, "text", None) or getattr(replied, "caption", None) or ""
+    ).strip()
+    if question or replied_body:
+        payload = build_noya_user_payload(
+            message,
+            question,
+            bot_username=bot_user.username or "",
+        )
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         answer = await run_ai_with_memory(
             message,
-            question,
+            payload,
             call_noya_api,
             session_id=f"telegram:{message.chat.id}",
         )

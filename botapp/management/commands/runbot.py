@@ -69,6 +69,7 @@ from botapp.memory.commands import (
     memories_command,
 )
 from botapp.memory.integration import run_ai_with_memory
+from botapp.noya_context import build_noya_user_payload
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
 from botapp.agent_handlers import ArchiveMiddleware, router as agent_router
@@ -1531,10 +1532,18 @@ async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool)
                 f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
             )
             return
+    bot_username = ""
+    try:
+        me = await message.bot.me()
+        bot_username = me.username or ""
+    except Exception:
+        bot_username = ""
+    # Attach reply-chain + recent group chatter so Noya can read the chat/tag target.
+    payload = build_noya_user_payload(message, question, bot_username=bot_username)
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     answer = await run_ai_with_memory(
         message,
-        question,
+        payload,
         call_noya_api,
         session_id=f"telegram:{message.chat.id}",
     )
@@ -1581,6 +1590,17 @@ async def handle_text_message(message: Message, bot: Bot):
         is_noya = True
         question = message.text.strip()
 
+    replied_body = ""
+    if message.reply_to_message:
+        replied_body = (
+            message.reply_to_message.text
+            or message.reply_to_message.caption
+            or ""
+        ).strip()
+    # Bare «نویا» / @bot while replying to a message still counts — she should
+    # read that message (and its parent reply) even without an extra question.
+    if is_noya and not question and replied_body:
+        question = "به این پیام توجه کن و پاسخ بده."
     if is_noya and question:
         if not group.collaboration_enabled:
             return
@@ -1607,22 +1627,12 @@ async def handle_text_message(message: Message, bot: Bot):
     if not group.collaboration_enabled or not is_bot_mentioned(message, bot_info.username or ""):
         return
     question = extract_question_from_mention(message, bot_info.username or "")
+    if not question and replied_body:
+        question = "به این پیام توجه کن و پاسخ بده."
     if not question:
         await message.reply("سوال خود را بنویسید.")
         return
-    if not await consume_group_quota(message.chat.id, message.chat.title or ""):
-        await message.reply(
-            f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
-        )
-        return
-    await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    answer = await run_ai_with_memory(
-        message,
-        question,
-        call_ai_api,
-        session_id=f"telegram:{message.chat.id}",
-    )
-    await reply_noya_answer(message, answer)
+    await _answer_noya_chat(message, question, use_quota=True)
 
 
 @router.chat_member()
