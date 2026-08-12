@@ -540,3 +540,30 @@ class BotStartGateRuntimeTest(TestCase):
             anonymous_admin_message, plain_bot, bot_username="NuyaRobot"
         ) is False
         plain_bot.get_chat_member.assert_not_awaited()
+
+    def test_reply_to_bot_bypasses_start_gate_for_non_started_user(self):
+        """Other bots / automation accounts that reply to Noya must not be gated."""
+        from asgiref.sync import async_to_sync
+        from botapp.bot_start_gate import enforce_bot_start_message
+        from botapp.models import GroupSettings, TelegramUser
+
+        GroupSettings.objects.filter(chat_id=-100123).update(bot_start_required=True)
+        TelegramUser.objects.update_or_create(
+            telegram_user_id=4242, defaults={"started": False, "blocked": False}
+        )
+        bot = AsyncMock()
+        bot.id = 111001
+        bot.me = AsyncMock(return_value=SimpleNamespace(id=111001, username="BotUnderTest"))
+        bot.get_chat_member.side_effect = [
+            self.member("administrator", can_delete_messages=True),
+            self.member("member"),
+        ]
+        message = self.message(77)
+        message.from_user = SimpleNamespace(id=4242, is_bot=True, first_name="Mira", username="mira")
+        message.text = "هه، چی شد نویا؟ من اومدم"
+        message.reply_to_message = SimpleNamespace(
+            from_user=SimpleNamespace(id=111001, is_bot=True)
+        )
+        assert async_to_sync(enforce_bot_start_message)(
+            message, bot, bot_username="BotUnderTest"
+        ) is False

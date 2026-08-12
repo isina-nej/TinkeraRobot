@@ -1570,7 +1570,7 @@ async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool)
     if is_other_bot_sender(message, self_bot_id=self_bot_id):
         sender_id = int(message.from_user.id)
         if not allow_bot_to_bot_reply(int(message.chat.id), sender_id):
-            logger.info(
+            logger.warning(
                 "Noya bot-to-bot rate-limited chat=%s sender_bot=%s",
                 message.chat.id,
                 sender_id,
@@ -1859,7 +1859,8 @@ class BotPeerObserveMiddleware(BaseMiddleware):
             except Exception:
                 reply_to_us = False
             if (user and getattr(user, "is_bot", False)) or reply_to_us:
-                logger.info(
+                # WARNING: production root log level is WARNING (info is silent).
+                logger.warning(
                     "noya_peer_update chat=%s msg=%s from_id=%s from_bot=%s "
                     "username=%s reply_to_us=%s text=%r",
                     event.chat.id,
