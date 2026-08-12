@@ -180,13 +180,16 @@ def purge_old_moderation_logs(group_id, retention_days):
 
 @sync_to_async(thread_sensitive=True)
 def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
-    """Atomically consume one daily request from a group's quota."""
+    """Atomically consume one daily request from a group's quota.
+
+    ``daily_prompt_limit=0`` (default) means unlimited — always allowed.
+    """
     today = timezone.localdate()
 
     with transaction.atomic():
         quota, _ = GroupQuota.objects.select_for_update().get_or_create(
             chat_id=chat_id,
-            defaults={"chat_title": chat_title},
+            defaults={"chat_title": chat_title, "daily_prompt_limit": 0},
         )
 
         changed_fields = []
@@ -200,7 +203,11 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
         if changed_fields:
             quota.save(update_fields=list(dict.fromkeys(changed_fields)))
 
-        if quota.daily_prompt_limit <= 0 or quota.tokens_used_today >= quota.daily_prompt_limit:
+        # 0 = unlimited for every group.
+        if quota.daily_prompt_limit == 0:
+            return True
+
+        if quota.tokens_used_today >= quota.daily_prompt_limit:
             return False
 
         GroupQuota.objects.filter(pk=quota.pk).update(
