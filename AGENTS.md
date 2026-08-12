@@ -88,3 +88,10 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   (`extract_message_body`). Peer logs with `rich_message` + `rich_plain_len=N`
   mean extraction worked; `RICH_MESSAGE` with `rich_plain_len` missing/0 means
   the payload is still empty/unparsed.
+- Native Telegram modal «The owner of this bot has restricted access…» on
+  `/start` means **managed-bot access restriction**
+  (`BotAccessSettings.is_access_restricted`). The update never reaches Django.
+  Noya’s own token cannot clear it (`BOT_ACCESS_FORBIDDEN`). Fix with the
+  *manager* bot token: `manage.py unrestrict_bot_access` (needs
+  `MANAGER_BOT_TOKEN`), or disable Access restriction in the manager /
+  BotFather UI. Check the bot profile for «Created and managed by @…».
