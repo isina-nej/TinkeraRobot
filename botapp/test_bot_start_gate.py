@@ -394,6 +394,7 @@ class BotStartGateRuntimeTest(TestCase):
         from botapp.forced_membership_handlers import router as forced_router
         from botapp.forced_membership_runtime import ForcedMembershipMiddleware
         from botapp.management.commands.runbot import (
+            BotPeerObserveMiddleware,
             MultiBotGroupDeduplicationMiddleware,
             build_dispatcher,
             router as main_router,
@@ -402,9 +403,10 @@ class BotStartGateRuntimeTest(TestCase):
         try:
             dispatcher = build_dispatcher("NuyaRobot")
             middlewares = dispatcher.message.outer_middleware._middlewares
-            assert isinstance(middlewares[0], MultiBotGroupDeduplicationMiddleware)
-            assert isinstance(middlewares[1], ForcedMembershipMiddleware)
-            assert isinstance(middlewares[2], BotStartGateMiddleware)
+            assert isinstance(middlewares[0], BotPeerObserveMiddleware)
+            assert isinstance(middlewares[1], MultiBotGroupDeduplicationMiddleware)
+            assert isinstance(middlewares[2], ForcedMembershipMiddleware)
+            assert isinstance(middlewares[3], BotStartGateMiddleware)
         finally:
             forced_router._parent_router = None
             main_router._parent_router = None

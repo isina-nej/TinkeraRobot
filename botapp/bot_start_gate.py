@@ -123,7 +123,9 @@ def _service_or_exempt(message: Message) -> bool:
     }
     return bool(
         not user
-        or (user.is_bot and message.sender_chat is None)
+        # Other bots must never be blocked by the start-gate — otherwise Telegram
+        # bot-to-bot replies/tags never reach Noya chat handlers.
+        or getattr(user, "is_bot", False)
         or (
             getattr(message, "content_type", None) is not None
             and message.content_type not in user_content_types
