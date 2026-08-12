@@ -74,10 +74,9 @@ from botapp.noya_bot_chat import (
     allow_bot_to_bot_reply,
     is_other_bot_sender,
     is_self_bot_message,
-    notify_bot_reply_edit,
-    wait_for_bot_reply_body,
-    watch_empty_bot_reply,
 )
+from botapp.noya_edits import coordinator as noya_edit_coordinator
+from botapp.noya_address import is_addressing_noya
 from botapp.telegram_media import collect_noya_images
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
@@ -1720,18 +1719,70 @@ async def _handle_noya_text_message(message: Message, bot: Bot, *, allow_command
     await _answer_noya_chat(message, question, use_quota=True)
 
 
+async def _answer_settled_edit(message: Message) -> None:
+    """Single entry used by the edit coordinator after text has settled."""
+    await _handle_noya_text_message(message, message.bot, allow_commands=False)
+
+
+def _ensure_edit_coordinator_callback() -> None:
+    if noya_edit_coordinator._answer_cb is None:
+        noya_edit_coordinator.set_answer_callback(_answer_settled_edit)
+
+
 @router.message(F.text & ~F.command)
 async def handle_text_message(message: Message, bot: Bot):
     await _handle_noya_text_message(message, bot, allow_commands=True)
 
 
-@router.edited_message(F.text)
-async def handle_edited_text_noya(message: Message, bot: Bot):
-    """Mira-like bots often stream: empty shell message, then edit in the real text."""
-    if await notify_bot_reply_edit(message):
-        # A waiter started on the empty shell will answer once — avoid double reply.
-        return
-    await _handle_noya_text_message(message, bot, allow_commands=False)
+class NoyaEditedMessageFilter(BaseFilter):
+    """Only track edits that are relevant to Noya (reply / @mention / name / bot)."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        if not (message.text or message.caption):
+            # Empty edits still matter when they belong to an open stream session
+            # or are bot replies to us (shell growing later).
+            pass
+        me = await bot.me()
+        user = message.from_user
+        if user and getattr(user, "is_bot", False) and int(user.id) == int(me.id):
+            return False
+        replied = message.reply_to_message
+        reply_to_us = bool(
+            replied and replied.from_user and int(replied.from_user.id) == int(me.id)
+        )
+        if reply_to_us:
+            return True
+        if user and getattr(user, "is_bot", False):
+            # Other bots editing any message that addresses Noya.
+            return is_addressing_noya(
+                message,
+                bot_id=int(me.id),
+                bot_username=me.username or "",
+            )
+        # Humans: only if they address Noya in the edited body (rare, but useful).
+        return is_addressing_noya(
+            message,
+            bot_id=int(me.id),
+            bot_username=me.username or "",
+        )
+
+
+@router.edited_message(NoyaEditedMessageFilter())
+async def handle_edited_noya_message(message: Message, bot: Bot):
+    """Professional streaming/edit intake — debounce via NoyaEditCoordinator."""
+    _ensure_edit_coordinator_callback()
+    result = await noya_edit_coordinator.observe_edit(
+        message,
+        reason="edited_message",
+    )
+    logger.warning(
+        "noya_edited_handler chat=%s msg=%s result=%s flags=%s len=%s",
+        message.chat.id,
+        message.message_id,
+        result,
+        _message_kind_flags(message),
+        len(_message_body(message)),
+    )
 
 
 class EmptyBotReplyToUsFilter(BaseFilter):
@@ -1755,26 +1806,16 @@ class EmptyBotReplyToUsFilter(BaseFilter):
 
 @router.message(EmptyBotReplyToUsFilter())
 async def handle_empty_bot_reply_to_noya(message: Message, bot: Bot):
-    """Empty reply shells from other bots: wait briefly for a streamed edit."""
-    await watch_empty_bot_reply(message)
+    """Open an edit session for empty bot→Noya shells; coordinator answers once settled."""
+    _ensure_edit_coordinator_callback()
     logger.warning(
-        "noya_empty_bot_reply_wait chat=%s msg=%s from=%s flags=%s",
+        "noya_empty_bot_reply_session chat=%s msg=%s from=%s flags=%s",
         message.chat.id,
         message.message_id,
         getattr(message.from_user, "username", None),
         _message_kind_flags(message),
     )
-    filled = await wait_for_bot_reply_body(message)
-    if not _message_body(filled):
-        logger.warning(
-            "noya_empty_bot_reply_timeout chat=%s msg=%s from=%s flags=%s",
-            message.chat.id,
-            message.message_id,
-            getattr(message.from_user, "username", None),
-            _message_kind_flags(filled),
-        )
-        return
-    await _handle_noya_text_message(filled, bot, allow_commands=False)
+    await noya_edit_coordinator.observe_empty_shell(message, reason="empty_bot_reply")
 
 
 def _is_noya_image_document(message: Message) -> bool:
