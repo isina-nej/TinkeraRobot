@@ -70,6 +70,11 @@ from botapp.memory.commands import (
 )
 from botapp.memory.integration import run_ai_with_memory
 from botapp.noya_context import build_noya_user_payload
+from botapp.noya_bot_chat import (
+    allow_bot_to_bot_reply,
+    is_other_bot_sender,
+    is_self_bot_message,
+)
 from botapp.telegram_media import collect_noya_images
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
@@ -457,14 +462,27 @@ def is_bot_mentioned(message: Message, bot_username: str) -> bool:
 
     if message.reply_to_message:
         replied_user = message.reply_to_message.from_user
-        if replied_user and replied_user.username == bot_username:
+        if replied_user and (replied_user.username or "").lower() == bot_username.lower():
             return True
 
     body = message.text or message.caption or ""
     if body:
-        pattern = rf'@{re.escape(bot_username)}'
+        pattern = rf'@{re.escape(bot_username)}\b'
         if re.search(pattern, body, flags=re.IGNORECASE):
             return True
+        # Command mention: /start@OurBot
+        if re.search(rf'/\w+@{re.escape(bot_username)}\b', body, flags=re.IGNORECASE):
+            return True
+
+    for entity in list(getattr(message, "entities", None) or []) + list(
+        getattr(message, "caption_entities", None) or []
+    ):
+        etype = getattr(entity, "type", None)
+        etype_val = getattr(etype, "value", etype)
+        if str(etype_val) in {"mention", "text_mention", "bot_command"} and body:
+            frag = body[entity.offset : entity.offset + entity.length]
+            if bot_username.lower() in frag.lower():
+                return True
 
     return False
 
@@ -525,6 +543,10 @@ async def process_moderation(message: Message, bot: Bot, group: GroupSettings) -
     if not group.moderation_enabled or not message.from_user:
         return False
     user = message.from_user
+    # Other bots are not moderated here — Telegram bot-to-bot replies/tags must
+    # reach Noya handlers instead of being treated as spam/flood.
+    if getattr(user, "is_bot", False):
+        return False
     if await is_group_admin(message.chat.id, user.id, bot):
         return False
 
@@ -1529,18 +1551,38 @@ def _noya_question_from_text(text: str, bot_username: str = "") -> str | None:
 
 
 async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool) -> None:
+    bot_username = ""
+    self_bot_id = None
+    try:
+        me = await message.bot.me()
+        bot_username = me.username or ""
+        self_bot_id = int(me.id)
+    except Exception:
+        bot_username = ""
+        self_bot_id = None
+
+    # Never answer our own messages (loop guard).
+    if is_self_bot_message(message, self_bot_id=self_bot_id):
+        return
+
+    # Other bots: only when they address us (caller already checked triggers),
+    # and only within a tight rate limit to stop bot↔bot ping-pong.
+    if is_other_bot_sender(message, self_bot_id=self_bot_id):
+        sender_id = int(message.from_user.id)
+        if not allow_bot_to_bot_reply(int(message.chat.id), sender_id):
+            logger.info(
+                "Noya bot-to-bot rate-limited chat=%s sender_bot=%s",
+                message.chat.id,
+                sender_id,
+            )
+            return
+
     if use_quota:
         if not await consume_group_quota(message.chat.id, message.chat.title or ""):
             await message.reply(
                 f"گروه {message.chat.title or message.chat.id}، به پایان درخواست‌های روزانه خود رسیده است. با مدیریت آن تماس بگیرید."
             )
             return
-    bot_username = ""
-    try:
-        me = await message.bot.me()
-        bot_username = me.username or ""
-    except Exception:
-        bot_username = ""
     images = []
     try:
         images = await collect_noya_images(message.bot, message)
@@ -1552,6 +1594,16 @@ async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool)
         ask = "این تصویر / استیکر را ببین و پاسخ بده."
     # Attach reply-chain + recent group chatter so Noya can read the chat/tag target.
     payload = build_noya_user_payload(message, ask, bot_username=bot_username)
+    if is_other_bot_sender(message, self_bot_id=self_bot_id):
+        sender = message.from_user
+        bot_label = (getattr(sender, "username", None) or getattr(sender, "full_name", None) or str(sender.id))
+        payload = (
+            f"[SPEAKER_BOT]\n"
+            f"telegram_bot_id={int(sender.id)}\n"
+            f"username={bot_label}\n"
+            f"note=این پیام از یک ربات دیگر است؛ اگر ریپلای/تگ کرده جواب بده."
+            f"\n[/SPEAKER_BOT]\n\n{payload}"
+        )
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
     answer = await run_ai_with_memory(
         message,

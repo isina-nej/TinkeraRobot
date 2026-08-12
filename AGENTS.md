@@ -70,3 +70,8 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   `image_url` data URLs. Optional `NOYA_VISION_MODEL` overrides `NOYA_MODEL` only
   when images are attached. On the current 9router stack, `NoyaBest`, `fast`,
   `gemini/*`, `sina-pro`, and several `gc/gemini-*` aliases accept vision.
+- Bot-to-bot: Telegram does **not** deliver other bots' group messages unless
+  **Bot-to-Bot Communication Mode** is enabled in @BotFather (Mini App → Bot
+  Settings). Code already answers other bots on reply/@mention/«نویا» with
+  self-skip + rate limits (`botapp/noya_bot_chat.py`). For broader receive
+  (name-only, no reply), also disable Group Privacy and keep Noya as group admin.
