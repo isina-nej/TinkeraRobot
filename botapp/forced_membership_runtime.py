@@ -109,6 +109,20 @@ async def enforce_forced_membership_message(
     if _is_exempt_message(message):
         return False
 
+    # Don't swallow bot-to-bot / tag / reply-to-Noya traffic.
+    try:
+        me = await bot.me()
+        from botapp.noya_address import is_addressing_noya
+
+        if is_addressing_noya(
+            message,
+            bot_id=int(me.id),
+            bot_username=me.username or "",
+        ):
+            return False
+    except Exception:
+        logger.debug("Noya-address membership bypass failed", exc_info=True)
+
     rules = await active_rules_for_source(message.chat.id)
     if not rules:
         legacy = await legacy_membership_setting(message.chat.id)

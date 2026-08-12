@@ -452,6 +452,21 @@ async def enforce_bot_start_message(
     if _service_or_exempt(message):
         return False
 
+    # Replies / @mentions / «نویا» must reach chat handlers even if the sender
+    # never /start'ed (other bots, guest bots, chat-automation accounts).
+    try:
+        me = await bot.me()
+        from botapp.noya_address import is_addressing_noya
+
+        if is_addressing_noya(
+            message,
+            bot_id=int(me.id),
+            bot_username=bot_username or (me.username or ""),
+        ):
+            return False
+    except Exception:
+        logger.debug("Noya-address bypass check failed", exc_info=True)
+
     group, started, blocked = await _load_gate_context(message.chat.id, message.from_user.id)
     if not group.bot_start_required:
         return False
