@@ -78,3 +78,7 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   `noya_peer_update` in `group-bot` journal — if Mira replies and that line is
   missing, Telegram never delivered the update. For broader receive, disable
   Group Privacy (`/setprivacy` → Disable; re-add bot to group) and keep Noya admin.
+- Streaming bot edits: Mira-like bots often send `text=''` then grow the body via
+  `edited_message`. `botapp/noya_edits.py` (`NoyaEditCoordinator`) debounces the
+  stream (settle ~1.5s, max wait ~15s) and answers **once**. Watch journal lines
+  `noya_edit_session_open` / `noya_edit_tracked` / `noya_edit_dispatch`.
