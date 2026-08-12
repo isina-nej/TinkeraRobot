@@ -72,6 +72,9 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   `gemini/*`, `sina-pro`, and several `gc/gemini-*` aliases accept vision.
 - Bot-to-bot: Telegram does **not** deliver other bots' group messages unless
   **Bot-to-Bot Communication Mode** is enabled in @BotFather (Mini App → Bot
-  Settings). Code already answers other bots on reply/@mention/«نویا» with
-  self-skip + rate limits (`botapp/noya_bot_chat.py`). For broader receive
-  (name-only, no reply), also disable Group Privacy and keep Noya as group admin.
+  Settings). This is separate from **Guest Mode** (`supports_guest_queries` in
+  `getMe`). Code answers other bots on reply/@mention/«نویا» with self-skip +
+  rate limits (`botapp/noya_bot_chat.py`). Incoming peer updates log as
+  `noya_peer_update` in `group-bot` journal — if Mira replies and that line is
+  missing, Telegram never delivered the update. For broader receive, disable
+  Group Privacy (`/setprivacy` → Disable; re-add bot to group) and keep Noya admin.

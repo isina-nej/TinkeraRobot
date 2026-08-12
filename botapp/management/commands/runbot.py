@@ -1842,6 +1842,37 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+class BotPeerObserveMiddleware(BaseMiddleware):
+    """Log other-bot messages / replies-to-us so missing Telegram delivery is obvious."""
+
+    async def __call__(self, handler, event, data):
+        if isinstance(event, Message) and event.chat and event.chat.type in {
+            ChatType.GROUP,
+            ChatType.SUPERGROUP,
+        }:
+            user = event.from_user
+            replied = event.reply_to_message
+            replied_user = replied.from_user if replied else None
+            try:
+                me = await data["bot"].me()
+                reply_to_us = bool(replied_user and int(replied_user.id) == int(me.id))
+            except Exception:
+                reply_to_us = False
+            if (user and getattr(user, "is_bot", False)) or reply_to_us:
+                logger.info(
+                    "noya_peer_update chat=%s msg=%s from_id=%s from_bot=%s "
+                    "username=%s reply_to_us=%s text=%r",
+                    event.chat.id,
+                    event.message_id,
+                    getattr(user, "id", None),
+                    bool(user and getattr(user, "is_bot", False)),
+                    getattr(user, "username", None),
+                    reply_to_us,
+                    ((event.text or event.caption or "")[:160]),
+                )
+        return await handler(event, data)
+
+
 class MultiBotGroupDeduplicationMiddleware(BaseMiddleware):
     """Discard duplicate group updates only after Aiogram matched a handler."""
 
@@ -1862,10 +1893,18 @@ class MultiBotGroupDeduplicationMiddleware(BaseMiddleware):
         if not chat or chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
             return None
         if isinstance(event, Message):
+            me = await data["bot"].me()
+            replied = getattr(event, "reply_to_message", None)
+            replied_user = getattr(replied, "from_user", None) if replied else None
+            # Never drop a direct reply to us — required for bot↔bot roast chains.
+            if replied_user is not None and int(replied_user.id) == int(me.id):
+                update = data.get("event_update")
+                kind = "edited_message" if getattr(update, "edited_message", None) else "message"
+                return kind, chat.id, event.message_id
             text = event.text or ""
             target = re.search(r"@([A-Za-z0-9_]{5,})\b", text)
             if target and target.group(1).casefold() in self.bot_usernames:
-                username = (await data["bot"].me()).username or ""
+                username = me.username or ""
                 if target.group(1).casefold() != username.casefold():
                     return "not-targeted"
             update = data.get("event_update")
@@ -1902,6 +1941,10 @@ class MultiBotGroupDeduplicationMiddleware(BaseMiddleware):
 
 def build_dispatcher(bot_username: str = "", *, bot_usernames: tuple[str, ...] = ()) -> Dispatcher:
     dispatcher = Dispatcher()
+    # Observe first so we log even if a later middleware short-circuits.
+    observe = BotPeerObserveMiddleware()
+    dispatcher.message.outer_middleware(observe)
+    dispatcher.edited_message.outer_middleware(observe)
     deduplication = MultiBotGroupDeduplicationMiddleware(bot_usernames)
     dispatcher.message.outer_middleware(deduplication)
     dispatcher.edited_message.outer_middleware(deduplication)
