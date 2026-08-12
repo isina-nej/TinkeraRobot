@@ -7,6 +7,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineQueryResultArticle, InputTextMessageContent
 
 from botapp.memory.integration import run_ai_with_memory
+from botapp.noya_bot_chat import (
+    allow_bot_to_bot_reply,
+    is_other_bot_sender,
+    is_self_bot_message,
+)
 from botapp.noya_context import build_noya_user_payload, strip_bot_address
 from botapp.services import call_noya_api
 from botapp.telegram_media import collect_noya_images
@@ -125,6 +130,8 @@ async def nouya_mention_handler(message: types.Message):
         raise SkipHandler()
 
     bot_user = await message.bot.get_me()
+    if is_self_bot_message(message, self_bot_id=int(bot_user.id)):
+        return
     username = (bot_user.username or "").lower()
     if username and f"@{username}" in text.lower():
         raise SkipHandler()
@@ -155,6 +162,9 @@ async def nouya_mention_handler(message: types.Message):
         )
     )
     if question or replied_body or replied_has_media:
+        if is_other_bot_sender(message, self_bot_id=int(bot_user.id)):
+            if not allow_bot_to_bot_reply(int(message.chat.id), int(message.from_user.id)):
+                return
         payload = build_noya_user_payload(
             message,
             question,
