@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from django.core.management.base import BaseCommand, CommandError
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import BaseFilter, Command, CommandObject
@@ -78,6 +79,7 @@ from botapp.noya_bot_chat import (
 from botapp.noya_edits import coordinator as noya_edit_coordinator
 from botapp.noya_address import is_addressing_noya
 from botapp.telegram_media import collect_noya_images
+from botapp.telegram_rich import extract_message_body
 from botapp.emoji_handlers import router as emoji_router
 from botapp.nouya_handler import router as nouya_router
 from botapp.agent_handlers import ArchiveMiddleware, router as agent_router
@@ -467,7 +469,7 @@ def is_bot_mentioned(message: Message, bot_username: str) -> bool:
         if replied_user and (replied_user.username or "").lower() == bot_username.lower():
             return True
 
-    body = message.text or message.caption or ""
+    body = extract_message_body(message)
     if body:
         pattern = rf'@{re.escape(bot_username)}\b'
         if re.search(pattern, body, flags=re.IGNORECASE):
@@ -490,7 +492,7 @@ def is_bot_mentioned(message: Message, bot_username: str) -> bool:
 
 
 def extract_question_from_mention(message: Message, bot_username: str) -> str:
-    body = message.text or message.caption or ""
+    body = extract_message_body(message)
     if not body:
         return ""
 
@@ -1658,15 +1660,12 @@ async def _handle_noya_text_message(message: Message, bot: Bot, *, allow_command
     replied_body = ""
     replied_has_media = False
     if message.reply_to_message:
-        replied_body = (
-            message.reply_to_message.text
-            or message.reply_to_message.caption
-            or ""
-        ).strip()
+        replied_body = extract_message_body(message.reply_to_message)
         replied = message.reply_to_message
         replied_has_media = bool(
             replied.photo
             or replied.sticker
+            or getattr(replied, "rich_message", None)
             or (
                 replied.document
                 and (replied.document.mime_type or "").startswith("image/")
@@ -1730,7 +1729,12 @@ def _ensure_edit_coordinator_callback() -> None:
 
 
 @router.message(F.text & ~F.command)
+@router.message(F.rich_message)
 async def handle_text_message(message: Message, bot: Bot):
+    """Plain text and Rich Messages (Mira etc. use RICH_MESSAGE with empty text)."""
+    # Empty rich shells must fall through to EmptyBotReplyToUsFilter / edit coordinator.
+    if not _message_body(message):
+        raise SkipHandler()
     await _handle_noya_text_message(message, bot, allow_commands=True)
 
 
@@ -1738,10 +1742,6 @@ class NoyaEditedMessageFilter(BaseFilter):
     """Only track edits that are relevant to Noya (reply / @mention / name / bot)."""
 
     async def __call__(self, message: Message, bot: Bot) -> bool:
-        if not (message.text or message.caption):
-            # Empty edits still matter when they belong to an open stream session
-            # or are bot replies to us (shell growing later).
-            pass
         me = await bot.me()
         user = message.from_user
         if user and getattr(user, "is_bot", False) and int(user.id) == int(me.id):
@@ -1966,7 +1966,7 @@ def is_admin(user_id: int) -> bool:
 
 
 def _message_body(message: Message) -> str:
-    return (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    return extract_message_body(message)
 
 
 def _message_kind_flags(message: Message) -> str:
@@ -1975,6 +1975,7 @@ def _message_kind_flags(message: Message) -> str:
     for attr in (
         "text",
         "caption",
+        "rich_message",
         "photo",
         "sticker",
         "animation",
@@ -2002,6 +2003,9 @@ def _message_kind_flags(message: Message) -> str:
     ctype = getattr(message, "content_type", None)
     if ctype:
         flags.append(f"content_type={ctype}")
+    body = extract_message_body(message)
+    if body and "rich_message" in flags and not (getattr(message, "text", None) or getattr(message, "caption", None)):
+        flags.append(f"rich_plain_len={len(body)}")
     return ",".join(flags) or "none"
 
 

@@ -15,6 +15,7 @@ from botapp.noya_bot_chat import (
 from botapp.noya_context import build_noya_user_payload, strip_bot_address
 from botapp.services import call_noya_api
 from botapp.telegram_media import collect_noya_images
+from botapp.telegram_rich import extract_message_body
 
 router = Router()
 
@@ -32,7 +33,7 @@ async def _reply_html(message: types.Message, text: str) -> None:
 
 
 def _guest_question(message: types.Message, bot_username: str = "") -> str:
-    text = message.text or message.caption or ""
+    text = extract_message_body(message)
     ask = strip_bot_address(text, bot_username) if bot_username else text.strip()
     if not ask and bot_username:
         ask = re.sub(rf"@{re.escape(bot_username)}\b", "", text, flags=re.IGNORECASE).strip()
@@ -59,10 +60,10 @@ def _channel_question(text: str, bot_username: str = "") -> str | None:
     return text.strip() or "به این پست پاسخ بده."
 
 
-@router.channel_post(F.text | F.caption)
+@router.channel_post(F.text | F.caption | F.rich_message)
 async def channel_nouya_handler(message: types.Message):
     bot_user = await message.bot.get_me()
-    body = message.text or message.caption or ""
+    body = extract_message_body(message)
     question = _channel_question(body, bot_user.username or "")
     if question is None:
         return

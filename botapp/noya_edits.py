@@ -2,10 +2,11 @@
 
 Streaming AI bots (e.g. Mira) often deliver:
 
-1. an empty shell message (``text=''``) as a reply to Noya;
-2. one or more rapid ``edited_message`` updates that fill/grow the text.
+1. an empty shell message (``text=''`` / empty rich draft) as a reply to Noya;
+2. one or more rapid ``edited_message`` updates that fill/grow the body
+   (plain ``text`` **or** ``rich_message`` blocks — Mira uses Rich Messages).
 
-This module turns that into **exactly one** Noya answer after the text settles.
+This module turns that into **exactly one** Noya answer after the body settles.
 """
 
 from __future__ import annotations
@@ -18,6 +19,8 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from botapp.telegram_rich import extract_message_body
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ _MIN_BODY = int(os.getenv("NOYA_EDIT_MIN_BODY_CHARS", "1") or 1)
 
 
 def message_body(message) -> str:
-    return (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    return extract_message_body(message)
 
 
 def message_key(message) -> tuple[int, int] | None:

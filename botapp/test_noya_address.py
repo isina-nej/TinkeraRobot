@@ -24,3 +24,15 @@ class NoyaAddressTest(SimpleTestCase):
         self.assertTrue(is_addressing_noya(msg2, bot_id=1, bot_username="BotUnderTest"))
         msg3 = SimpleNamespace(text="سلام به همه", caption=None, reply_to_message=None)
         self.assertFalse(is_addressing_noya(msg3, bot_id=1, bot_username="BotUnderTest"))
+
+    def test_rich_message_name_call(self):
+        rich = SimpleNamespace(
+            blocks=[SimpleNamespace(type="paragraph", text="نویا جان بیا")]
+        )
+        msg = SimpleNamespace(
+            text="",
+            caption=None,
+            rich_message=rich,
+            reply_to_message=None,
+        )
+        self.assertTrue(is_addressing_noya(msg, bot_id=1, bot_username="BotUnderTest"))

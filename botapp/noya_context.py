@@ -17,6 +17,8 @@ from collections import defaultdict, deque
 
 from django.conf import settings
 
+from botapp.telegram_rich import extract_message_body
+
 GROUP_CHAT_TYPES = {"group", "supergroup"}
 _RECENT_MAX = 24
 _RECENT_DEFAULT = 8
@@ -41,9 +43,7 @@ def _is_group(message) -> bool:
 
 
 def _body(message) -> str:
-    if message is None:
-        return ""
-    return (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    return extract_message_body(message)
 
 
 def _sender_label(message) -> str:

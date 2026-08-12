@@ -82,3 +82,9 @@ and `MEMORY_DEPLOY_RUNBOOK.md`.
   `edited_message`. `botapp/noya_edits.py` (`NoyaEditCoordinator`) debounces the
   stream (settle ~1.5s, max wait ~15s) and answers **once**. Watch journal lines
   `noya_edit_session_open` / `noya_edit_tracked` / `noya_edit_dispatch`.
+- Mira (and some other AI bots) send Telegram **Rich Messages**
+  (`content_type=RICH_MESSAGE`) with empty `text`/`caption`. Readable content is
+  in `message.rich_message` — flatten via `botapp/telegram_rich.py`
+  (`extract_message_body`). Peer logs with `rich_message` + `rich_plain_len=N`
+  mean extraction worked; `RICH_MESSAGE` with `rich_plain_len` missing/0 means
+  the payload is still empty/unparsed.

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from botapp.telegram_rich import extract_message_body
+
 _NOYA_NAME_RE = re.compile(r"(?<![\wآ-ی])نویا(?![\wآ-ی])", re.IGNORECASE)
 
 
@@ -23,7 +25,7 @@ def is_addressing_noya(
     ):
         return True
 
-    body = (getattr(message, "text", None) or getattr(message, "caption", None) or "")
+    body = extract_message_body(message)
     if not body:
         return False
     if bot_username:
