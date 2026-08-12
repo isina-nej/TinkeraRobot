@@ -14,7 +14,7 @@ from django.core.management.base import BaseCommand, CommandError
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     ChatMemberUpdated,
@@ -74,6 +74,9 @@ from botapp.noya_bot_chat import (
     allow_bot_to_bot_reply,
     is_other_bot_sender,
     is_self_bot_message,
+    notify_bot_reply_edit,
+    wait_for_bot_reply_body,
+    watch_empty_bot_reply,
 )
 from botapp.telegram_media import collect_noya_images
 from botapp.emoji_handlers import router as emoji_router
@@ -1615,18 +1618,20 @@ async def _answer_noya_chat(message: Message, question: str, *, use_quota: bool)
     await reply_noya_answer(message, answer)
 
 
-@router.message(F.text & ~F.command)
-async def handle_text_message(message: Message, bot: Bot):
-    if not message.text:
+async def _handle_noya_text_message(message: Message, bot: Bot, *, allow_commands: bool) -> None:
+    """Shared path for new + edited text that addresses Noya."""
+    body = _message_body(message)
+    if not body:
         return
 
     bot_info = await bot.me()
     bot_username = bot_info.username or ""
 
     # Private chat: any non-command text is a conversation with Noya.
-    # No group-admin requirement; user only needs to have started the bot.
     if is_private_chat(message):
-        question = _noya_question_from_text(message.text, bot_username) or message.text.strip()
+        if body.startswith("/"):
+            return
+        question = _noya_question_from_text(body, bot_username) or body
         if not question:
             return
         await _answer_noya_chat(message, question, use_quota=False)
@@ -1639,12 +1644,8 @@ async def handle_text_message(message: Message, bot: Bot):
     if await process_moderation(message, bot, group):
         return
 
-    # Explicit Noya address / reply-to-bot:
-    # Works for any member (no group-admin check). Bot itself does not need to be
-    # group admin either — Telegram must deliver the update (@mention / reply /
-    # or privacy-mode disabled so "نویا …" reaches the bot).
     is_noya = False
-    question = _noya_question_from_text(message.text, bot_username) or ""
+    question = _noya_question_from_text(body, bot_username) or ""
     if question:
         is_noya = True
     elif (
@@ -1653,7 +1654,7 @@ async def handle_text_message(message: Message, bot: Bot):
         and message.reply_to_message.from_user.id == bot_info.id
     ):
         is_noya = True
-        question = message.text.strip()
+        question = body
 
     replied_body = ""
     replied_has_media = False
@@ -1672,8 +1673,6 @@ async def handle_text_message(message: Message, bot: Bot):
                 and (replied.document.mime_type or "").startswith("image/")
             )
         )
-    # Bare «نویا» / @bot while replying to a message still counts — she should
-    # read that message (and its parent reply) even without an extra question.
     if is_noya and not question and (replied_body or replied_has_media):
         question = "به این پیام توجه کن و پاسخ بده."
     if is_noya and question:
@@ -1682,7 +1681,18 @@ async def handle_text_message(message: Message, bot: Bot):
         await _answer_noya_chat(message, question, use_quota=True)
         return
 
-    command_name, args = plain_command(message.text)
+    if not allow_commands:
+        # Edited messages: only Noya chat, not moderation slash-commands.
+        if not group.collaboration_enabled or not is_bot_mentioned(message, bot_username):
+            return
+        question = extract_question_from_mention(message, bot_username)
+        if not question and replied_body:
+            question = "به این پیام توجه کن و پاسخ بده."
+        if question:
+            await _answer_noya_chat(message, question, use_quota=True)
+        return
+
+    command_name, args = plain_command(body)
     moderation_command = PLAIN_MODERATION_COMMANDS.get(command_name)
     if moderation_command:
         handlers = {
@@ -1699,15 +1709,72 @@ async def handle_text_message(message: Message, bot: Bot):
         await handlers[moderation_command]()
         return
 
-    if not group.collaboration_enabled or not is_bot_mentioned(message, bot_info.username or ""):
+    if not group.collaboration_enabled or not is_bot_mentioned(message, bot_username):
         return
-    question = extract_question_from_mention(message, bot_info.username or "")
+    question = extract_question_from_mention(message, bot_username)
     if not question and replied_body:
         question = "به این پیام توجه کن و پاسخ بده."
     if not question:
         await message.reply("سوال خود را بنویسید.")
         return
     await _answer_noya_chat(message, question, use_quota=True)
+
+
+@router.message(F.text & ~F.command)
+async def handle_text_message(message: Message, bot: Bot):
+    await _handle_noya_text_message(message, bot, allow_commands=True)
+
+
+@router.edited_message(F.text)
+async def handle_edited_text_noya(message: Message, bot: Bot):
+    """Mira-like bots often stream: empty shell message, then edit in the real text."""
+    if await notify_bot_reply_edit(message):
+        # A waiter started on the empty shell will answer once — avoid double reply.
+        return
+    await _handle_noya_text_message(message, bot, allow_commands=False)
+
+
+class EmptyBotReplyToUsFilter(BaseFilter):
+    """Match empty group replies from other bots directed at Noya."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        if not is_group_chat(message) or not message.from_user:
+            return False
+        if not getattr(message.from_user, "is_bot", False):
+            return False
+        if _message_body(message):
+            return False
+        replied = message.reply_to_message
+        if not replied or not replied.from_user:
+            return False
+        me = await bot.me()
+        if int(message.from_user.id) == int(me.id):
+            return False
+        return int(replied.from_user.id) == int(me.id)
+
+
+@router.message(EmptyBotReplyToUsFilter())
+async def handle_empty_bot_reply_to_noya(message: Message, bot: Bot):
+    """Empty reply shells from other bots: wait briefly for a streamed edit."""
+    await watch_empty_bot_reply(message)
+    logger.warning(
+        "noya_empty_bot_reply_wait chat=%s msg=%s from=%s flags=%s",
+        message.chat.id,
+        message.message_id,
+        getattr(message.from_user, "username", None),
+        _message_kind_flags(message),
+    )
+    filled = await wait_for_bot_reply_body(message)
+    if not _message_body(filled):
+        logger.warning(
+            "noya_empty_bot_reply_timeout chat=%s msg=%s from=%s flags=%s",
+            message.chat.id,
+            message.message_id,
+            getattr(message.from_user, "username", None),
+            _message_kind_flags(filled),
+        )
+        return
+    await _handle_noya_text_message(filled, bot, allow_commands=False)
 
 
 def _is_noya_image_document(message: Message) -> bool:
@@ -1810,8 +1877,23 @@ async def handle_member_update(event: ChatMemberUpdated, bot: Bot, event_update)
 @router.edited_message()
 @router.message()
 async def check_message(message: Message, bot: Bot):
+    # Empty bot→Noya replies are handled by handle_empty_bot_reply_to_noya (registered
+    # earlier). This catch-all only runs moderation for remaining group traffic.
     if not is_group_chat(message) or not message.from_user:
         return
+    # Avoid double-handling empty bot replies that are waiting on edits.
+    if (
+        getattr(message.from_user, "is_bot", False)
+        and not _message_body(message)
+        and message.reply_to_message
+        and message.reply_to_message.from_user
+    ):
+        try:
+            me = await bot.me()
+            if int(message.reply_to_message.from_user.id) == int(me.id):
+                return
+        except Exception:
+            pass
     group = await get_or_create_group_settings(message.chat.id, message.chat.title or "")
     if await process_moderation(message, bot, group):
         return
@@ -1842,6 +1924,46 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def _message_body(message: Message) -> str:
+    return (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+
+
+def _message_kind_flags(message: Message) -> str:
+    """Compact non-empty content flags for diagnosing empty-text bot replies."""
+    flags = []
+    for attr in (
+        "text",
+        "caption",
+        "photo",
+        "sticker",
+        "animation",
+        "document",
+        "voice",
+        "video",
+        "video_note",
+        "audio",
+        "poll",
+        "dice",
+        "checklist",
+        "story",
+        "venue",
+        "contact",
+        "location",
+        "game",
+        "invoice",
+        "paid_media",
+        "entities",
+        "caption_entities",
+    ):
+        val = getattr(message, attr, None)
+        if val:
+            flags.append(attr)
+    ctype = getattr(message, "content_type", None)
+    if ctype:
+        flags.append(f"content_type={ctype}")
+    return ",".join(flags) or "none"
+
+
 class BotPeerObserveMiddleware(BaseMiddleware):
     """Log other-bot messages / replies-to-us so missing Telegram delivery is obvious."""
 
@@ -1858,18 +1980,22 @@ class BotPeerObserveMiddleware(BaseMiddleware):
                 reply_to_us = bool(replied_user and int(replied_user.id) == int(me.id))
             except Exception:
                 reply_to_us = False
+            update = data.get("event_update")
+            is_edit = bool(getattr(update, "edited_message", None))
             if (user and getattr(user, "is_bot", False)) or reply_to_us:
                 # WARNING: production root log level is WARNING (info is silent).
                 logger.warning(
-                    "noya_peer_update chat=%s msg=%s from_id=%s from_bot=%s "
-                    "username=%s reply_to_us=%s text=%r",
+                    "noya_peer_update chat=%s msg=%s edit=%s from_id=%s from_bot=%s "
+                    "username=%s reply_to_us=%s flags=%s text=%r",
                     event.chat.id,
                     event.message_id,
+                    is_edit,
                     getattr(user, "id", None),
                     bool(user and getattr(user, "is_bot", False)),
                     getattr(user, "username", None),
                     reply_to_us,
-                    ((event.text or event.caption or "")[:160]),
+                    _message_kind_flags(event),
+                    (_message_body(event)[:160]),
                 )
         return await handler(event, data)
 
