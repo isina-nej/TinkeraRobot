@@ -130,6 +130,21 @@ class GroupQuotaTest(TestCase):
         assert quota.tokens_used_today == 2
         assert quota.chat_title == "گروه"
 
+    def test_consume_group_quota_zero_is_unlimited(self):
+        GroupQuota.objects.create(chat_id=12, daily_prompt_limit=0, tokens_used_today=999)
+
+        for _ in range(5):
+            assert async_to_sync(consume_group_quota)(12, "گروه بی‌نهایت") is True
+
+        quota = GroupQuota.objects.get(chat_id=12)
+        assert quota.tokens_used_today == 999
+        assert quota.daily_prompt_limit == 0
+
+    def test_new_group_quota_defaults_to_unlimited(self):
+        assert async_to_sync(consume_group_quota)(13, "گروه جدید") is True
+        quota = GroupQuota.objects.get(chat_id=13)
+        assert quota.daily_prompt_limit == 0
+
     def test_consume_group_quota_resets_on_new_day(self):
         GroupQuota.objects.create(
             chat_id=11,

@@ -26,18 +26,24 @@ class BotMessageSettings(models.Model):
         return f"BotMessageSettings({self.pk})"
 
 class GroupQuota(models.Model):
-    """Daily AI request quota per group."""
+    """Daily AI request quota per group.
+
+    ``daily_prompt_limit=0`` means unlimited (no daily cap).
+    """
 
     chat_id = models.BigIntegerField(unique=True)
     chat_title = models.CharField(max_length=255, blank=True, default="")
     daily_prompt_limit = models.PositiveIntegerField(
-        default=100,
-        validators=[MinValueValidator(1)],
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Daily AI prompts allowed for this group. 0 = unlimited.",
     )
     tokens_used_today = models.PositiveIntegerField(default=0)
     last_reset = models.DateField(default=timezone.localdate)
 
     def __str__(self):
+        if self.daily_prompt_limit == 0:
+            return f"GroupQuota({self.chat_id}) - {self.tokens_used_today}/∞"
         return f"GroupQuota({self.chat_id}) - {self.tokens_used_today}/{self.daily_prompt_limit}"
 
 def generate_token() -> str:
