@@ -129,8 +129,14 @@ class NoyaAgentProvider:
     Uses a dedicated system prompt so it never mixes with normal Noya chat.
     """
 
-    def __init__(self, *, timeout: float = 30.0):
-        self.timeout = timeout
+    def __init__(self, *, timeout: float | None = None):
+        if timeout is None:
+            raw = os.getenv("AGENT_API_TIMEOUT", "").strip() or os.getenv("NOYA_API_TIMEOUT", "60")
+            try:
+                timeout = float(raw)
+            except ValueError:
+                timeout = 60.0
+        self.timeout = max(float(timeout), 5.0)
 
     async def _call(self, messages: list[dict]) -> str:
         api_key = os.getenv("NOYA_API_KEY", "").strip()
