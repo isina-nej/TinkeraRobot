@@ -52,11 +52,33 @@ _ADMIN_PREFIXES = ("نویا مدیر،", "نویا مدیر ,", "نویا مد�
 # normal Noya chat unchanged.
 _NOYA_PREFIXES = ("نویا،", "نویا ,", "نویا,", "نویا ", "noya,", "noya ")
 # When an admin replies to the bot, these hints mean "ops/analytics", not smalltalk.
+# Keep this list *narrow*: vague words like «چند تا» / «پیام» / «گروه» appear in
+# normal chat and must NOT steal the reply into the admin agent.
 _ADMIN_REPLY_HINTS = (
-    "تحلیل", "آنالیز", "آمار", "گزارش", "پیام", "چندتا", "چند تا", "چند ",
-    "تعداد", "امروز", "هفته", "ادمین", "قفل", "بن ", "بن‌", "سکوت", "میوت",
-    "اخطار", "تنظیمات", "مشترک", "عضو", "حذف", "پین", "کانال", "گروه",
-    "فعالیت", "ارسال", "پست", "mute", "ban", "warn", "stats", "analyze",
+    "تحلیل",
+    "آنالیز",
+    "آمار",
+    "گزارش",
+    "قفل",
+    "بن کن",
+    "بن‌کن",
+    "بن ",
+    "سکوت",
+    "میوت",
+    "اخطار",
+    "تنظیمات",
+    "حذف کن",
+    "پین کن",
+    "آنمیوت",
+    "آنبن",
+    "unmute",
+    "unban",
+    "mute",
+    "ban",
+    "warn",
+    "stats",
+    "analyze",
+    "analytics",
 )
 
 
