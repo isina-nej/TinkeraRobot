@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 _flood_events = defaultdict(deque)
 _duplicate_events = defaultdict(deque)
 
+# ponytail: 45s beats Telegram's ~60s "bot is not responding" feel and stops the
+# router's long provider-fallback chain from burning 2 minutes of user patience.
+# Raise via env if the upstream combo genuinely needs longer.
+NOYA_API_TIMEOUT = float(os.getenv("NOYA_API_TIMEOUT", "45"))
+
 
 _ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff\u2060\u00ad]")
 # Scheme / www links, bare t.me / telegram.me, and common bare domains.
@@ -252,11 +257,14 @@ async def call_noya_api(
         ),
     }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=NOYA_API_TIMEOUT) as client:
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
             return data["choices"][0]["message"]["content"]
+    except httpx.TimeoutException:
+        logger.warning("Noya AI API request timed out after %ss", NOYA_API_TIMEOUT)
+        return "نویا این لحظه شلوغه و جواب نداد. یک دقیقه دیگه دوباره امتحان کن."
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
         logger.exception("Noya AI API request failed")
         return "خطا در ارتباط با نویا. لطفاً دوباره تلاش کنید."

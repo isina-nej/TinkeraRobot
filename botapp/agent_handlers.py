@@ -79,6 +79,7 @@ _ADMIN_REPLY_HINTS = (
     "stats",
     "analyze",
     "analytics",
+    "briefing",
 )
 
 

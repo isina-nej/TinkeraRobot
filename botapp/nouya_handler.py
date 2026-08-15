@@ -107,10 +107,13 @@ async def guest_nouya_handler(message: types.Message):
             parse_mode="HTML",
         )
     except TelegramBadRequest:
-        await message.bot.edit_message_text(
-            inline_message_id=sent.inline_message_id,
-            text=answer,
-        )
+        try:
+            await message.bot.edit_message_text(
+                inline_message_id=sent.inline_message_id,
+                text=answer,
+            )
+        except TelegramBadRequest:
+            pass
 
 
 RESPONSES = [

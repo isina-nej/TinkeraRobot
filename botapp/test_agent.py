@@ -1002,21 +1002,27 @@ class TriggerRegressionTests(TestCase):
     def test_admin_reply_casual_question_falls_through(self):
         # Regression: «چند تا» in normal chat must NOT hijack reply-to-bot into agent.
         bot = admin_bot(42)
-        msg = make_message(
+        for text in (
             "خواب مفید چند تا چنده",
-            user_id=42,
-            reply_user_id=1000,
-            reply_is_bot=True,
-        )
-        matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
-        self.assertFalse(matched)
+            "از ساعت چند تا چند خواب مفیده",
+        ):
+            msg = make_message(
+                text,
+                user_id=42,
+                reply_user_id=bot.id,
+                reply_message_id=9,
+                reply_is_bot=True,
+            )
+            matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
+            self.assertFalse(matched, text)
 
     def test_admin_reply_analyze_hint_routes_to_agent(self):
         bot = admin_bot(42)
         msg = make_message(
             "گروه رو تحلیل کن ببین امروز چندتا پیام داد",
             user_id=42,
-            reply_user_id=1000,
+            reply_user_id=bot.id,
+            reply_message_id=9,
             reply_is_bot=True,
         )
         matched = async_to_sync(AgentTriggerFilter().__call__)(msg, bot)
