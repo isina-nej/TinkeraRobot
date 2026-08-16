@@ -142,8 +142,44 @@ class HarnessStep(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     code: str = Field(default="", max_length=4000)
     answer: str = Field(default="", max_length=4000)
+    thinking: str = Field(default="", max_length=400)
 
-    @field_validator("tool", "code", "answer")
+    @field_validator("tool", "code", "answer", "thinking")
     @classmethod
     def _strip_fields(cls, value: str) -> str:
         return (value or "").strip()
+
+
+class RouteClassification(BaseModel):
+    """AI router: admin-agent vs ordinary Noya chat."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    route: Literal["agent", "chat"] = "chat"
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    thinking: str = Field(default="", max_length=400)
+    reason: str = Field(default="", max_length=200)
+
+
+class DailyScheduleParams(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    action: Literal["lock", "unlock"]
+    value: str = Field(min_length=1, max_length=16)
+
+    @field_validator("value")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return (value or "").strip()[:16]
+
+
+class CancelScheduleParams(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    action: Literal["lock", "unlock"]
+    value: str = Field(min_length=1, max_length=16)
+
+    @field_validator("value")
+    @classmethod
+    def _trim(cls, value: str) -> str:
+        return (value or "").strip()[:16]

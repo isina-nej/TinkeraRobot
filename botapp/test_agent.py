@@ -944,7 +944,7 @@ class SecurityTests(TestCase):
 # --- Regression: agent trigger does not hijack normal Noya chat -------------
 
 
-@override_settings(AGENT_ENABLED=True)
+@override_settings(AGENT_ENABLED=True, AGENT_CLASSIFY_ENABLED=False)
 class TriggerRegressionTests(TestCase):
     def setUp(self):
         clear_role_cache()
@@ -1353,3 +1353,91 @@ class SandboxAndHarnessTests(TestCase):
         self.assertTrue(result.ok)
         self.assertTrue(any(o.name == "denied" for o in result.observations))
         self.assertEqual(bot.banned, [])
+
+
+class AgentClassifyCacheTests(SimpleTestCase):
+    def setUp(self):
+        from botapp.agent.cache import classify_cache
+
+        classify_cache.clear()
+
+    def test_cache_roundtrip(self):
+        from botapp.agent.cache import classify_cache
+
+        classify_cache.set("k", True)
+        self.assertTrue(classify_cache.get("k"))
+
+    def test_fail_open_when_classifier_errors(self):
+        from botapp.agent.classify import should_route_to_agent
+
+        class _Boom:
+            async def classify_route(self, text, *, chat_id):
+                raise RuntimeError("down")
+
+        ok = async_to_sync(should_route_to_agent)(
+            "خواب مفید چند تا چنده",
+            chat_id=-991,
+            provider=_Boom(),
+        )
+        self.assertFalse(ok)
+
+    def test_injected_classifier_routes_agent(self):
+        from botapp.agent.cache import classify_cache
+        from botapp.agent.classify import should_route_to_agent
+
+        class _P:
+            async def classify_route(self, text, *, chat_id):
+                return {
+                    "route": "agent",
+                    "confidence": 0.95,
+                    "thinking": "دستور قفل است",
+                    "reason": "lock",
+                }
+
+        classify_cache.clear()
+        ok = async_to_sync(should_route_to_agent)(
+            "یه کار عجیب مدیریتی بکن",
+            chat_id=-42,
+            provider=_P(),
+        )
+        self.assertTrue(ok)
+        # Second call hits cache and must not need the provider.
+        ok2 = async_to_sync(should_route_to_agent)(
+            "یه کار عجیب مدیریتی بکن",
+            chat_id=-42,
+            provider=None,
+        )
+        self.assertTrue(ok2)
+
+
+class DailyScheduleToolTests(TestCase):
+    def setUp(self):
+        clear_role_cache()
+        self.chat_id = -1001
+        GroupSettings.objects.create(chat_id=self.chat_id, chat_title="G")
+
+    def test_parser_schedule_list(self):
+        self.assertEqual(parse("زمان‌بندی‌های روزانه چیه").tool, "group.get_schedules")
+
+    def test_parser_schedule_add(self):
+        decision = parse("هر روز ساعت 23:00 زمان‌بندی قفل گروه را ثبت کن")
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.tool, "group.add_daily_schedule")
+
+    @override_settings(AGENT_ENABLED=True, AGENT_AI_ENABLED=False)
+    def test_add_schedule_tool(self):
+        from botapp.models import GroupSchedule
+
+        bot = admin_bot(42)
+        result = async_to_sync(handle_admin_command)(
+            bot,
+            make_message("x", chat_id=self.chat_id, user_id=42),
+            "هر روز ساعت 23:00 زمان‌بندی قفل گروه را ثبت کن",
+        )
+        self.assertTrue(result.needs_confirmation)
+        self.assertEqual(GroupSchedule.objects.count(), 0)
+        res = async_to_sync(callbacks.process_confirm)(
+            bot, result.confirm_token, user_id=42, chat_id=self.chat_id
+        )
+        self.assertIn("23:00", res.text)
+        self.assertEqual(GroupSchedule.objects.filter(action="lock").count(), 1)

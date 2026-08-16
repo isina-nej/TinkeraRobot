@@ -36,6 +36,7 @@ _DETERMINISTIC_TOOLS = (
     "analytics.get_today_summary",
     "group.get_member_count",
     "group.get_moderation_status",
+    "group.get_schedules",
     "audit.get_recent_actions",
 )
 
@@ -276,6 +277,10 @@ async def run_investigation(
                 )
             # Fall back to deterministic gather if the first plan call fails.
             return await _deterministic_investigation(ctx, bot, user_text)
+
+        thinking = (decision.get("thinking") or "").strip()
+        if thinking:
+            logger.info("agent_thinking chat=%s step=%s %s", ctx.chat_id, step, thinking[:240])
 
         action = (decision.get("action") or "").strip().lower()
         if action == "finish":

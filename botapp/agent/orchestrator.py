@@ -121,7 +121,27 @@ async def _decide(ctx: AgentContext, command_text: str, ai_provider) -> tuple[Ag
     decision = await ai_provider.parse_admin_command(
         command_text, ctx, registry.ai_catalog()
     )
-    if not registry.has(decision.tool) or decision.confidence < min_conf:
+    if not registry.has(decision.tool):
+        raise AgentParseError(
+            "❌ از دستور مطمئن نیستم. لطفاً واضح‌تر و مشخص‌تر بنویسید."
+        )
+    if decision.confidence < min_conf:
+        if (
+            _setting("AGENT_HARNESS_ENABLED", True)
+            and decision.confidence >= 0.5
+            and registry.has("harness.investigate")
+        ):
+            return (
+                AgentDecision(
+                    intent="investigate",
+                    tool="harness.investigate",
+                    confidence=decision.confidence,
+                    risk_level="low",
+                    requires_confirmation=False,
+                    human_summary="بررسی مرحله‌ای",
+                ),
+                "ai-harness",
+            )
         raise AgentParseError(
             "❌ از دستور مطمئن نیستم. لطفاً واضح‌تر و مشخص‌تر بنویسید."
         )

@@ -132,7 +132,9 @@ AGENT_MAX_COMMAND_LENGTH = int(os.getenv("AGENT_MAX_COMMAND_LENGTH", "2000"))
 # ReAct investigation harness (multi-step read tools + sandboxed code).
 AGENT_HARNESS_ENABLED = os.getenv("AGENT_HARNESS_ENABLED", "true").lower() in _TRUE
 AGENT_HARNESS_AI_ENABLED = os.getenv("AGENT_HARNESS_AI_ENABLED", "true").lower() in _TRUE
-AGENT_HARNESS_MAX_STEPS = int(os.getenv("AGENT_HARNESS_MAX_STEPS", "5"))
+AGENT_HARNESS_MAX_STEPS = int(os.getenv("AGENT_HARNESS_MAX_STEPS", "8"))
+AGENT_CLASSIFY_ENABLED = os.getenv("AGENT_CLASSIFY_ENABLED", "true").lower() in _TRUE
+AGENT_CACHE_TTL_SECONDS = int(os.getenv("AGENT_CACHE_TTL_SECONDS", "600"))
 MESSAGE_ARCHIVE_ENABLED = os.getenv("MESSAGE_ARCHIVE_ENABLED", "false").lower() in _TRUE
 MESSAGE_ARCHIVE_RETENTION_DAYS = int(os.getenv("MESSAGE_ARCHIVE_RETENTION_DAYS", "30"))
 

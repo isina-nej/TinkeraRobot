@@ -7,10 +7,9 @@ routers. Existing handlers are untouched.
 Routing safety:
 * ``/agent`` and ``/adminai`` are dedicated commands with zero overlap with
   existing handlers.
-* The natural-language "نویا،" trigger uses a strict async filter that only
-  matches when the sender is an admin AND the deterministic parser recognises an
-  admin intent. Otherwise it returns ``False`` and the message falls through to
-  the normal Noya chat handler unchanged.
+* The natural-language "نویا،" / reply-to-bot path classifies with AI
+  (fail-open to Noya chat). Known deterministic admin commands skip the
+  classifier. Non-admins never trigger the agent.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ from django.conf import settings as dj_settings
 from botapp.agent import callbacks, confirmations
 from botapp.agent.ai import NoyaAgentProvider
 from botapp.agent.orchestrator import AgentResult, handle_admin_command
-from botapp.agent.parser import parse as deterministic_parse
+from botapp.agent.classify import should_route_to_agent
 from botapp.agent.permissions import resolve_admin_identity
 from botapp import activity
 from botapp import agent_tools  # noqa: F401  (registers tools into the registry)
@@ -51,36 +50,6 @@ _ADMIN_PREFIXES = ("نویا مدیر،", "نویا مدیر ,", "نویا مد�
 # recognises a definite admin intent; otherwise the message falls through to
 # normal Noya chat unchanged.
 _NOYA_PREFIXES = ("نویا،", "نویا ,", "نویا,", "نویا ", "noya,", "noya ")
-# When an admin replies to the bot, these hints mean "ops/analytics", not smalltalk.
-# Keep this list *narrow*: vague words like «چند تا» / «پیام» / «گروه» appear in
-# normal chat and must NOT steal the reply into the admin agent.
-_ADMIN_REPLY_HINTS = (
-    "تحلیل",
-    "آنالیز",
-    "آمار",
-    "گزارش",
-    "قفل",
-    "بن کن",
-    "بن‌کن",
-    "بن ",
-    "سکوت",
-    "میوت",
-    "اخطار",
-    "تنظیمات",
-    "حذف کن",
-    "پین کن",
-    "آنمیوت",
-    "آنبن",
-    "unmute",
-    "unban",
-    "mute",
-    "ban",
-    "warn",
-    "stats",
-    "analyze",
-    "analytics",
-    "briefing",
-)
 
 
 def _agent_enabled() -> bool:
@@ -153,24 +122,22 @@ class AgentTriggerFilter(BaseFilter):
                         return False
             return {"agent_command": admin_command}
 
-        # 2) Plain trigger — agent only for a recognised deterministic intent.
+        # 2) Plain "نویا، …" — deterministic ops, else AI classifies agent vs chat.
         command = _strip_prefix(stripped, lowered, _NOYA_PREFIXES)
         if command:
             from botapp.agent.target_chat import extract_explicit_chat_ref
 
             _, remainder = extract_explicit_chat_ref(command)
             parse_text = remainder or command
-            if deterministic_parse(parse_text) is None:
-                return False
             if message.chat.type != ChatType.PRIVATE:
                 identity = await resolve_admin_identity(bot, message.chat.id, message.from_user)
                 if not identity.is_admin:
                     return False
+            if not await should_route_to_agent(parse_text, chat_id=int(message.chat.id)):
+                return False
             return {"agent_command": command}
 
-        # 3) Admin reply-to-bot with ops/analytics intent → agent (NOT Noya chat).
-        # This is what makes «گروه رو تحلیل کن ببین امروز چندتا پیام داد» work when
-        # the admin replies to a previous bot message instead of using /agent.
+        # 3) Admin reply-to-bot: AI classifies (fail-open to Noya chat).
         replied = getattr(message, "reply_to_message", None)
         replied_user = getattr(replied, "from_user", None) if replied else None
         if replied_user is not None and message.chat.type in {
@@ -184,15 +151,13 @@ class AgentTriggerFilter(BaseFilter):
 
                 _, remainder = extract_explicit_chat_ref(stripped)
                 parse_text = remainder or stripped
-                looks_admin = deterministic_parse(parse_text) is not None or any(
-                    hint in lowered for hint in _ADMIN_REPLY_HINTS
+                identity = await resolve_admin_identity(
+                    bot, message.chat.id, message.from_user
                 )
-                if looks_admin:
-                    identity = await resolve_admin_identity(
-                        bot, message.chat.id, message.from_user
-                    )
-                    if identity.is_admin:
-                        return {"agent_command": stripped}
+                if identity.is_admin and await should_route_to_agent(
+                    parse_text, chat_id=int(message.chat.id)
+                ):
+                    return {"agent_command": stripped}
         return False
 
 
@@ -234,6 +199,10 @@ async def _dispatch(message: Message, command: str) -> None:
         )
         return
 
+    try:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    except Exception:
+        pass
     result: AgentResult = await handle_admin_command(
         message.bot, message, command, ai_provider=_ai_provider()
     )

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from aiogram.exceptions import TelegramAPIError
 
 from botapp.agent.context import AgentContext
@@ -11,10 +13,16 @@ from botapp.agent.permissions import (
     GROUP_READ,
     MEMBERS_RESTRICT,
     SETTINGS_READ,
+    SETTINGS_WRITE,
 )
 from botapp.agent.registry import register_tool
 from botapp.agent.responses import fa_number
-from botapp.agent.schemas import EmptyParams, LockParams
+from botapp.agent.schemas import (
+    CancelScheduleParams,
+    DailyScheduleParams,
+    EmptyParams,
+    LockParams,
+)
 from botapp.agent.risk import HIGH, LOW, MEDIUM
 
 from ._common import actor_from_context
@@ -143,6 +151,83 @@ async def get_schedules(ctx: AgentContext, bot, params) -> str:
     return "🗓 زمان‌بندی‌های روزانه:\n" + "\n".join(lines)
 
 
+def _parse_hhmm(raw: str):
+    from datetime import time as dt_time
+
+    from botapp.agent.parser import normalize_digits
+
+    text = normalize_digits(raw or "")
+    match = re.search(r"(\d{1,2})[:.،](\d{2})", text)
+    if not match:
+        match = re.search(r"\b(\d{1,2})\b", text)
+        if not match:
+            return None
+        hour = int(match.group(1))
+        minute = 0
+    else:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return dt_time(hour=hour, minute=minute)
+
+
+async def add_daily_schedule(ctx: AgentContext, bot, params: DailyScheduleParams) -> str:
+    from asgiref.sync import sync_to_async
+
+    from botapp.models import GroupSchedule
+
+    parsed = _parse_hhmm(params.value)
+    if parsed is None:
+        return "❌ ساعت نامعتبر است. مثل ۲۳:۰۰ بنویس."
+    if ctx.group_settings is None:
+        return "❌ گروه پیدا نشد."
+
+    @sync_to_async(thread_sensitive=True)
+    def save():
+        obj, created = GroupSchedule.objects.update_or_create(
+            group=ctx.group_settings,
+            action=params.action,
+            time_of_day=parsed,
+            defaults={
+                "is_active": True,
+                "created_by_user_id": ctx.admin.user_id,
+            },
+        )
+        return created, obj
+
+    created, obj = await save()
+    verb = "قفل" if params.action == "lock" else "بازکردن"
+    state = "ثبت شد" if created else "به‌روز شد"
+    return f"⏰ زمان‌بندی روزانه {verb} ساعت {obj.time_of_day.strftime('%H:%M')} {state}."
+
+
+async def remove_daily_schedule(ctx: AgentContext, bot, params: CancelScheduleParams) -> str:
+    from asgiref.sync import sync_to_async
+
+    from botapp.models import GroupSchedule
+
+    parsed = _parse_hhmm(params.value)
+    if parsed is None or ctx.group_settings is None:
+        return "❌ زمان‌بندی برای حذف مشخص نیست."
+
+    @sync_to_async(thread_sensitive=True)
+    def delete():
+        qs = GroupSchedule.objects.filter(
+            group=ctx.group_settings,
+            action=params.action,
+            time_of_day=parsed,
+        )
+        count = qs.count()
+        qs.delete()
+        return count
+
+    deleted = await delete()
+    if not deleted:
+        return "زمان‌بندی منطبق پیدا نشد."
+    return "🗑 زمان‌بندی روزانه حذف شد."
+
+
 async def lock_group(ctx: AgentContext, bot, params: LockParams) -> str:
     from botapp.telegram_moderation import queue_or_execute
 
@@ -234,8 +319,28 @@ register_tool(
     handler=get_schedules,
 )
 register_tool(
+    name="group.add_daily_schedule",
+    description="افزودن زمان‌بندی روزانه قفل یا بازکردن. action=lock|unlock و value=HH:MM.",
+    input_schema=DailyScheduleParams,
+    permission=SETTINGS_WRITE,
+    risk_level=HIGH,
+    requires_confirmation=True,
+    handler=add_daily_schedule,
+    human_verb="ثبت زمان‌بندی روزانه",
+)
+register_tool(
+    name="group.remove_daily_schedule",
+    description="حذف زمان‌بندی روزانه. action=lock|unlock و value=HH:MM.",
+    input_schema=CancelScheduleParams,
+    permission=SETTINGS_WRITE,
+    risk_level=MEDIUM,
+    requires_confirmation=True,
+    handler=remove_daily_schedule,
+    human_verb="حذف زمان‌بندی روزانه",
+)
+register_tool(
     name="group.lock",
-    description="قفل‌کردن گروه (جلوگیری از ارسال پیام اعضا).",
+    description="قفل‌کردن گروه. delay_minutes یعنی بعداً اجرا شود (تایمر).",
     input_schema=LockParams,
     permission=MEMBERS_RESTRICT,
     risk_level=HIGH,

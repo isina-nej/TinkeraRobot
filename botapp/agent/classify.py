@@ -1,0 +1,68 @@
+"""AI-first router: admin-ops vs ordinary Noya chat.
+
+Fail-open: if the classifier is unavailable, the message stays in Noya chat
+instead of becoming a fake admin-command error.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from django.conf import settings as dj_settings
+
+from .ai import NoyaAgentProvider
+from .cache import cache_key, classify_cache
+from .parser import parse as deterministic_parse
+
+logger = logging.getLogger("botapp.agent")
+
+_MIN_ROUTE_CONFIDENCE = 0.72
+
+
+def _normalize(text: str) -> str:
+    return " ".join((text or "").casefold().split())
+
+
+async def should_route_to_agent(text: str, *, chat_id: int, provider=None) -> bool:
+    """Return True only when the message is a real admin/ops request."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if deterministic_parse(stripped) is not None:
+        return True
+    if not bool(getattr(dj_settings, "AGENT_CLASSIFY_ENABLED", True)):
+        return False
+    if not bool(getattr(dj_settings, "AGENT_AI_ENABLED", True)):
+        return False
+
+    key = cache_key("classify", chat_id, _normalize(stripped))
+    cached = classify_cache.get(key)
+    if cached is not None:
+        return bool(cached)
+
+    client = provider or NoyaAgentProvider(timeout=20.0)
+    try:
+        decision = await client.classify_route(stripped, chat_id=chat_id)
+    except Exception:
+        logger.info("agent_classify_fail_open chat=%s", chat_id)
+        classify_cache.set(key, False)
+        return False
+
+    thinking = (decision.get("thinking") or "").strip()
+    if thinking:
+        logger.info("agent_thinking chat=%s %s", chat_id, thinking[:240])
+    route = (decision.get("route") or "chat").strip().lower()
+    try:
+        confidence = float(decision.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    ok = route == "agent" and confidence >= _MIN_ROUTE_CONFIDENCE
+    logger.info(
+        "agent_classify chat=%s route=%s conf=%.2f ok=%s",
+        chat_id,
+        route,
+        confidence,
+        ok,
+    )
+    classify_cache.set(key, ok)
+    return ok

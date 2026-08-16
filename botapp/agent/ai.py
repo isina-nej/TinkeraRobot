@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from .context import AgentContext
 from .errors import AgentParseError, AIProviderError
-from .schemas import AgentDecision, HarnessStep
+from .schemas import AgentDecision, HarnessStep, RouteClassification
 
 logger = logging.getLogger("botapp.agent")
 
@@ -40,6 +40,10 @@ AGENT_SYSTEM_PROMPT = """تو یک تحلیلگر دستور مدیریتی بر
 - برای «چند پیام امروز / تعداد پیام / آمار پیام» از analytics.get_message_activity_today
   یا analytics.get_message_activity_period استفاده کن — هرگز نگو به API دسترسی نداری.
 - برای ارسال متن به کانال از channel.post_text با parameters.value=متن استفاده کن.
+- برای زمان‌بندی روزانه قفل/باز از group.add_daily_schedule / group.remove_daily_schedule
+  (parameters.action=lock|unlock و parameters.value=HH:MM) و برای دیدن لیست از group.get_schedules.
+- برای انجام کار بعد از چند دقیقه از group.lock/group.unlock با delay_minutes استفاده کن.
+- اگر کار چند منبع داده می‌خواهد، harness.investigate را انتخاب کن.
 - خروجی باید دقیقاً این کلیدها را داشته باشد: intent, tool, confidence, risk_level,
   requires_confirmation, parameters, human_summary.
 
@@ -51,14 +55,15 @@ AGENT_SYSTEM_PROMPT = """تو یک تحلیلگر دستور مدیریتی بر
 
 HARNESS_SYSTEM_PROMPT = """تو برنامه‌ریز یک harness بررسی (ReAct) برای ادمین ربات تلگرام هستی.
 در هر گام فقط یک اقدام JSON انتخاب کن. هیچ متن اضافه ننویس.
+فیلد thinking را یک جمله کوتاه دربارهٔ گام بعدی بگذار.
 
 اقدام‌های مجاز:
 1) call_tool — اجرای یک ابزار خواندنی از allowed_tools
-   {"action":"call_tool","tool":"analytics.get_message_activity_today","args":{}}
+   {"action":"call_tool","tool":"analytics.get_message_activity_today","args":{},"thinking":"..."}
 2) run_code — اجرای پایتون محدود روی دادهٔ جمع‌شده (متغیر data آماده است؛ نتیجه را در result بگذار)
-   {"action":"run_code","code":"result = data.get('count', 0)"}
+   {"action":"run_code","code":"result = data.get('count', 0)","thinking":"..."}
 3) finish — پاسخ نهایی فارسی بر اساس مشاهدات
-   {"action":"finish","answer":"..."}
+   {"action":"finish","answer":"...","thinking":"..."}
 
 قوانین:
 - فقط از ابزارهای allowed_tools استفاده کن؛ ابزار نوشتنی/خطرناک وجود ندارد.
@@ -66,6 +71,16 @@ HARNESS_SYSTEM_PROMPT = """تو برنامه‌ریز یک harness بررسی (R
 - در run_code حق import/network/file نداری؛ فقط روی data حساب کن.
 - پاسخ finish باید فارسی، کوتاه و متکی به مشاهدات باشد؛ ادعا بدون داده نکن.
 - هرگز نگو به API تلگرام دسترسی نداری؛ ابزارها همان دسترسی هستند.
+- می‌توانی چند بار call_tool بزنی تا کار تمام شود؛ تکرار بی‌فایده نکن.
+"""
+
+CLASSIFY_SYSTEM_PROMPT = """تو روتر یک ربات تلگرام هستی. تصمیم بگیر پیام ادمین دستور مدیریت گروه/کانال است یا گفتگوی عادی با نویا.
+
+route=agent فقط برای: بن/میوت/اخطار/قفل/آمار گروه/تحلیل مدیریتی/تنظیمات/حذف پیام/پین/زمان‌بندی/تایمر مدیریتی.
+route=chat برای سؤال عمومی، شوخی، خواب، آب‌وهوا، نظر شخصی، salam، و هر چیزی که اجرای ابزار تلگرام نمی‌خواهد.
+
+اگر مطمئن نیستی route=chat بگذار. فقط JSON:
+{"route":"agent"|"chat","confidence":0.0,"thinking":"...","reason":"..."}
 """
 
 
@@ -222,6 +237,33 @@ class NoyaAgentProvider:
             ]
             repaired = await self._call(repair)
             return HarnessStep.model_validate(extract_json(repaired)).model_dump()
+
+    async def classify_route(self, text: str, *, chat_id: int) -> dict:
+        user_prompt = (
+            f"chat_id={chat_id}\n"
+            f"MESSAGE:\n{(text or '').strip()}\n\n"
+            "فقط JSON روتر را برگردان."
+        )
+        messages = [
+            {"role": "system", "content": CLASSIFY_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+        raw = await self._call(messages)
+        try:
+            return RouteClassification.model_validate(extract_json(raw)).model_dump()
+        except (AgentParseError, ValidationError):
+            repair = messages + [
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        'فقط این قالب را برگردان: '
+                        '{"route":"chat","confidence":0.0,"thinking":"","reason":""}'
+                    ),
+                },
+            ]
+            repaired = await self._call(repair)
+            return RouteClassification.model_validate(extract_json(repaired)).model_dump()
 
 
 async def ask_harness_step(

@@ -255,6 +255,29 @@ def parse(command: str) -> AgentDecision | None:  # noqa: C901 - flat rule table
     ):
         return _decision("message.delete", {"target_source": "reply"}, intent="delete_message", summary="حذف پیام")
 
+    if _has_any(text, "زمان‌بندی", "زمانبندی", "تایمر روزانه", "برنامه روزانه"):
+        if _has_any(text, "حذف", "بردار", "لغو"):
+            action = "unlock" if _has_any(text, "باز") else "lock"
+            clock = re.search(r"(\d{1,2}[:.]\d{2})", text)
+            if clock:
+                return _decision(
+                    "group.remove_daily_schedule",
+                    {"action": action, "value": clock.group(1)},
+                    intent="remove_schedule",
+                    summary="حذف زمان‌بندی روزانه",
+                )
+        if _has_any(text, "بذار", "اضافه", "ثبت", "ست کن", "هر روز"):
+            action = "unlock" if _has_any(text, "باز") else "lock"
+            clock = re.search(r"(\d{1,2}[:.]\d{2})", text)
+            if clock:
+                return _decision(
+                    "group.add_daily_schedule",
+                    {"action": action, "value": clock.group(1)},
+                    intent="add_schedule",
+                    summary="ثبت زمان‌بندی روزانه",
+                )
+        return _decision("group.get_schedules", {}, intent="get_schedules", summary="نمایش زمان‌بندی‌ها")
+
     # --- Group lock / unlock --------------------------------------------------
     if _has_any(text, "قفل") and _has_any(text, "گروه", "چت") and not _has_any(text, "باز", "رفع", "unlock"):
         duration = parse_duration_minutes(text)
