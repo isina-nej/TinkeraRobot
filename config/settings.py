@@ -115,6 +115,7 @@ MEMORY_FAIL_OPEN = os.getenv("MEMORY_FAIL_OPEN", "true").lower() in {"1", "true"
 MEMORY_LATENCY_LOGGING_ENABLED = os.getenv("MEMORY_LATENCY_LOGGING_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 
 NOYA_SYSTEM_PROMPT_ENABLED = os.getenv("NOYA_SYSTEM_PROMPT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+NOYA_SEARCH_ENABLED = os.getenv("NOYA_SEARCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 # Noya creator identity (defaults resolved inside prompts.py).
 NOYA_CREATOR_IDS = os.getenv("NOYA_CREATOR_IDS", "").strip()
 NOYA_CREATOR_NAME = os.getenv("NOYA_CREATOR_NAME", "Sina").strip() or "Sina"

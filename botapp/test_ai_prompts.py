@@ -22,12 +22,14 @@ class NoyaSystemPromptTest(TestCase):
         question = "سلام"
         messages = build_ai_messages(question)
 
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["role"], "user")
-        self.assertEqual(messages[0]["content"], question)
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("[NOW]", messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], question)
 
     def test_noya_system_prompt_is_valid(self):
-        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v4")
+        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v5")
         prompt = get_noya_system_prompt()
         self.assertTrue(bool(prompt))
         self.assertIn("نویا", prompt)
@@ -44,6 +46,8 @@ class NoyaSystemPromptTest(TestCase):
         self.assertIn("tg://user?id=", prompt)
         self.assertIn("ادی", prompt)  # explicitly forbidden as fake name
         self.assertIn("هرگز نگو سازنده‌ات «ادی»", prompt)
+        self.assertIn("[NOW]", prompt)
+        self.assertIn("[WEB]", prompt)
 
     @patch.dict(
         os.environ,
@@ -70,17 +74,26 @@ class NoyaSystemPromptTest(TestCase):
         self.assertIn("role=creator", block)
 
         messages = build_ai_messages("سازنده‌ات کیه؟", speaker_user_id=7, speaker_name="User")
-        self.assertIn("role=user", messages[1]["content"])
+        self.assertIn("role=user", messages[-1]["content"])
 
     def test_build_ai_messages_includes_system_prompt_first(self):
         question = "سلام نویا"
         messages = build_ai_messages(question)
 
-        self.assertEqual(len(messages), 2)
+        self.assertEqual(len(messages), 3)
         self.assertEqual(messages[0]["role"], "system")
-        self.assertEqual(messages[0]["content"], get_noya_system_prompt())
-        self.assertEqual(messages[1]["role"], "user")
-        self.assertEqual(messages[1]["content"], question)
+        self.assertIn("[NOW]", messages[0]["content"])
+        self.assertIn("gregorian=", messages[0]["content"])
+        self.assertIn("jalali=", messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "system")
+        self.assertEqual(messages[1]["content"], get_noya_system_prompt())
+        self.assertEqual(messages[2]["role"], "user")
+        self.assertEqual(messages[2]["content"], question)
+
+    def test_build_ai_messages_attaches_search_block(self):
+        messages = build_ai_messages("قیمت دلار", search_block="[WEB]\n• دلار\n[/WEB]")
+        self.assertIn("[WEB]", messages[-1]["content"])
+        self.assertIn("قیمت دلار", messages[-1]["content"])
 
 
 class NoyaSystemPromptAPITest(TestCase):
@@ -101,10 +114,12 @@ class NoyaSystemPromptAPITest(TestCase):
             )
             payload = mock_post.call_args.kwargs["json"]
             self.assertEqual(payload["messages"][0]["role"], "system")
-            self.assertEqual(payload["messages"][0]["content"], expected_prompt)
+            self.assertIn("[NOW]", payload["messages"][0]["content"])
+            self.assertEqual(payload["messages"][1]["role"], "system")
+            self.assertEqual(payload["messages"][1]["content"], expected_prompt)
             self.assertIn("42", expected_prompt)
-            self.assertIn("role=creator", payload["messages"][1]["content"])
-            self.assertIn("تست نویا", payload["messages"][1]["content"])
+            self.assertIn("role=creator", payload["messages"][2]["content"])
+            self.assertIn("تست نویا", payload["messages"][2]["content"])
 
     @patch("botapp.services.httpx.AsyncClient.post")
     def test_call_ai_api_sends_system_prompt(self, mock_post):
@@ -117,5 +132,37 @@ class NoyaSystemPromptAPITest(TestCase):
 
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["messages"][0]["role"], "system")
-        self.assertEqual(payload["messages"][0]["content"], get_noya_system_prompt())
-        self.assertEqual(payload["messages"][1]["content"], "تست ai")
+        self.assertIn("[NOW]", payload["messages"][0]["content"])
+        self.assertEqual(payload["messages"][1]["content"], get_noya_system_prompt())
+        self.assertEqual(payload["messages"][2]["content"], "تست ai")
+
+
+class NoyaClockAndSearchTest(TestCase):
+    def test_now_block_has_both_calendars(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from botapp.noya_clock import format_now_block
+        from botapp.template_renderer import gregorian_to_jalali
+
+        now = datetime(2026, 8, 18, 5, 25, 9, tzinfo=ZoneInfo("Asia/Tehran"))
+        block = format_now_block(now)
+        jy, jm, jd = gregorian_to_jalali(now.date())
+        self.assertIn("[NOW]", block)
+        self.assertIn("Tuesday", block)
+        self.assertIn("August", block)
+        self.assertIn("2026", block)
+        self.assertIn("05:25:09", block)
+        self.assertIn(f"{jy:04d}-{jm:02d}-{jd:02d}", block)
+        self.assertIn("jalali=", block)
+        self.assertIn("سه‌شنبه", block)
+
+    def test_search_trigger_skips_chat_and_clock(self):
+        from botapp.noya_search import needs_web_search
+
+        self.assertFalse(needs_web_search("سلام خوبی؟"))
+        self.assertFalse(needs_web_search("ساعت چنده"))
+        self.assertFalse(needs_web_search("تاریخ امروز چیه"))
+        self.assertTrue(needs_web_search("قیمت دلار الان چنده"))
+        self.assertTrue(needs_web_search("اینو سرچ کن آخرین اخبار"))
+

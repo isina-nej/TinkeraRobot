@@ -6,7 +6,7 @@ import os
 import re
 from html import escape
 
-NOYA_SYSTEM_PROMPT_VERSION = "v4"
+NOYA_SYSTEM_PROMPT_VERSION = "v5"
 
 # Base persona — creator identity is filled at runtime from env.
 _NOYA_SYSTEM_PROMPT_BASE = """
@@ -52,6 +52,17 @@ _NOYA_SYSTEM_PROMPT_BASE = """
 - صمیمی‌تر، لوس‌تر و خودمونی‌تر حرف بزن؛ چاپلوسی نکن.
 - می‌توانی کمی پررو/لج باشی، ولی تهش کارش را راه بینداز.
 - اگر کاری خواست، انجام بده / جواب بده.
+
+# زمان و تقویم (خیلی مهم)
+اولین پیام سیستم همیشه بلوک [NOW] است: تاریخ و ساعت واقعی همین لحظه در تهران، هم میلادی هم شمسی.
+تاریخ/ساعت/روز هفته را از حافظهٔ آموزش یا حدس نگو. فقط از [NOW] استفاده کن.
+اگر پرسیدند «امروز چندمه / ساعت چنده / چه روزیه» همان بلوک را به فارسی محاوره بگو.
+
+# جستجوی وب
+اگر بلوک [WEB] در پیام کاربر آمده، نتایج زندهٔ جستجو است — منبع حقیقت برای خبر، قیمت، و رویداد روز.
+از [WEB] جواب بده؛ لینک را فقط اگر مفید است کوتاه بیاور.
+اگر [WEB] نیست، سرچ‌نشده فرض کن و برای خبر لحظه‌ای حدس نزن؛ بگو الان نتیجهٔ زنده ندارم یا از دانش کلی‌ات کوتاه بگو.
+اطلاعات ساختگی به‌عنوان «نتیجه گوگل» نساز.
 
 # زبان
 - پیش‌فرض همیشه فارسی محاوره‌ای، روان، کوتاه و طبیعی.
@@ -220,13 +231,17 @@ def build_ai_messages(
     speaker_user_id: int | None = None,
     speaker_name: str = "",
     images: list[dict] | None = None,
+    search_block: str = "",
 ) -> list[dict]:
     """Build chat messages. ``images`` items need ``mime`` + ``data`` (bytes)."""
     from django.conf import settings
 
+    from botapp.noya_clock import format_now_block
     from botapp.telegram_media import to_data_url
 
     messages: list[dict] = []
+    # Clock first so the model always sees the real world time before persona.
+    messages.append({"role": "system", "content": format_now_block()})
     if getattr(settings, "NOYA_SYSTEM_PROMPT_ENABLED", True):
         messages.append({"role": "system", "content": get_noya_system_prompt()})
 
@@ -235,8 +250,14 @@ def build_ai_messages(
         speaker_user_id=speaker_user_id,
         speaker_name=speaker_name,
     )
+    parts = []
     if speaker:
-        user_content = f"{speaker}\n\n{user_content}"
+        parts.append(speaker)
+    if (search_block or "").strip():
+        parts.append(search_block.strip())
+    if user_content:
+        parts.append(user_content)
+    user_content = "\n\n".join(parts)
 
     vision_parts: list[dict] = []
     for img in images or []:

@@ -222,6 +222,7 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
 
 
 from botapp.ai import build_ai_messages
+from botapp.noya_search import maybe_web_search
 
 async def call_noya_api(
     question: str,
@@ -246,6 +247,7 @@ async def call_noya_api(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    search_block = await maybe_web_search(question)
     payload = {
         "model": model,
         "stream": False,
@@ -254,6 +256,7 @@ async def call_noya_api(
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
             images=images,
+            search_block=search_block,
         ),
     }
     try:
@@ -279,6 +282,7 @@ async def call_ai_api(
     speaker_name: str = "",
     images: list[dict] | None = None,
 ) -> str:
+    search_block = await maybe_web_search(question)
     payload = {
         "sessionId": session_id,
         "messages": build_ai_messages(
@@ -286,6 +290,7 @@ async def call_ai_api(
             speaker_user_id=speaker_user_id,
             speaker_name=speaker_name,
             images=images,
+            search_block=search_block,
         ),
     }
     try:

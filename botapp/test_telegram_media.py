@@ -140,7 +140,7 @@ class TelegramMediaTest(SimpleTestCase):
             "این چیه؟",
             images=[{"mime": mime, "data": data}],
         )
-        content = messages[0]["content"]
+        content = messages[1]["content"]
         self.assertIsInstance(content, list)
         self.assertEqual(content[0]["type"], "text")
         self.assertEqual(content[1]["type"], "image_url")
