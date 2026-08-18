@@ -29,7 +29,7 @@ class NoyaSystemPromptTest(TestCase):
         self.assertEqual(messages[1]["content"], question)
 
     def test_noya_system_prompt_is_valid(self):
-        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v5")
+        self.assertEqual(NOYA_SYSTEM_PROMPT_VERSION, "v6")
         prompt = get_noya_system_prompt()
         self.assertTrue(bool(prompt))
         self.assertIn("نویا", prompt)
@@ -80,15 +80,14 @@ class NoyaSystemPromptTest(TestCase):
         question = "سلام نویا"
         messages = build_ai_messages(question)
 
-        self.assertEqual(len(messages), 3)
+        self.assertEqual(len(messages), 2)
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("[NOW]", messages[0]["content"])
         self.assertIn("gregorian=", messages[0]["content"])
         self.assertIn("jalali=", messages[0]["content"])
-        self.assertEqual(messages[1]["role"], "system")
-        self.assertEqual(messages[1]["content"], get_noya_system_prompt())
-        self.assertEqual(messages[2]["role"], "user")
-        self.assertEqual(messages[2]["content"], question)
+        self.assertIn(get_noya_system_prompt()[:40], messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertEqual(messages[1]["content"], question)
 
     def test_build_ai_messages_attaches_search_block(self):
         messages = build_ai_messages("قیمت دلار", search_block="[WEB]\n• دلار\n[/WEB]")
@@ -115,11 +114,10 @@ class NoyaSystemPromptAPITest(TestCase):
             payload = mock_post.call_args.kwargs["json"]
             self.assertEqual(payload["messages"][0]["role"], "system")
             self.assertIn("[NOW]", payload["messages"][0]["content"])
-            self.assertEqual(payload["messages"][1]["role"], "system")
-            self.assertEqual(payload["messages"][1]["content"], expected_prompt)
+            self.assertIn(expected_prompt[:40], payload["messages"][0]["content"])
             self.assertIn("42", expected_prompt)
-            self.assertIn("role=creator", payload["messages"][2]["content"])
-            self.assertIn("تست نویا", payload["messages"][2]["content"])
+            self.assertIn("role=creator", payload["messages"][1]["content"])
+            self.assertIn("تست نویا", payload["messages"][1]["content"])
 
     @patch("botapp.services.httpx.AsyncClient.post")
     def test_call_ai_api_sends_system_prompt(self, mock_post):
@@ -133,8 +131,8 @@ class NoyaSystemPromptAPITest(TestCase):
         payload = mock_post.call_args.kwargs["json"]
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertIn("[NOW]", payload["messages"][0]["content"])
-        self.assertEqual(payload["messages"][1]["content"], get_noya_system_prompt())
-        self.assertEqual(payload["messages"][2]["content"], "تست ai")
+        self.assertIn(get_noya_system_prompt()[:40], payload["messages"][0]["content"])
+        self.assertEqual(payload["messages"][1]["content"], "تست ai")
 
 
 class NoyaClockAndSearchTest(TestCase):
@@ -157,12 +155,40 @@ class NoyaClockAndSearchTest(TestCase):
         self.assertIn("jalali=", block)
         self.assertIn("سه‌شنبه", block)
 
+    def test_clock_question_answers_without_model(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from botapp.noya_clock import format_clock_reply, is_clock_question
+
+        self.assertTrue(is_clock_question("ساعت چنده"))
+        self.assertTrue(is_clock_question("نویا ساعت تهران چنده"))
+        self.assertTrue(is_clock_question("[درخواست فعلی]\nساعت چنده"))
+        self.assertFalse(is_clock_question("خواب مفید چند تا چنده"))
+        now = datetime(2026, 8, 18, 6, 40, 0, tzinfo=ZoneInfo("Asia/Tehran"))
+        reply = format_clock_reply(now)
+        self.assertIn("06:40", reply)
+        self.assertIn("2026", reply)
+        self.assertNotIn("[NOW]", reply)
+
+        with patch("botapp.services.httpx.AsyncClient") as client:
+            result = async_to_sync(call_noya_api)("ساعت چنده", "telegram:1")
+        self.assertIn("تهران", result)
+        client.assert_not_called()
+
     def test_search_trigger_skips_chat_and_clock(self):
-        from botapp.noya_search import needs_web_search
+        from botapp.noya_search import extract_search_query, needs_web_search
 
         self.assertFalse(needs_web_search("سلام خوبی؟"))
         self.assertFalse(needs_web_search("ساعت چنده"))
         self.assertFalse(needs_web_search("تاریخ امروز چیه"))
         self.assertTrue(needs_web_search("قیمت دلار الان چنده"))
         self.assertTrue(needs_web_search("اینو سرچ کن آخرین اخبار"))
+        self.assertTrue(needs_web_search("سرچ بزن"))
+        payload = (
+            "[پیام مورد اشاره — نویا]\n[NOW]\nدوشنبه ۲۸ آبان\n\n"
+            "[درخواست فعلی]\nسرچ بزن"
+        )
+        self.assertTrue(needs_web_search(payload))
+        self.assertIn("آبان", extract_search_query(payload))
 

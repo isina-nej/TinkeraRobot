@@ -222,6 +222,7 @@ def consume_group_quota(chat_id: int, chat_title: str = "") -> bool:
 
 
 from botapp.ai import build_ai_messages
+from botapp.noya_clock import format_clock_reply, is_clock_question
 from botapp.noya_search import maybe_web_search
 
 async def call_noya_api(
@@ -232,6 +233,10 @@ async def call_noya_api(
     speaker_name: str = "",
     images: list[dict] | None = None,
 ) -> str:
+    if is_clock_question(question):
+        logger.info("noya_clock_direct session=%s", session_id)
+        return format_clock_reply()
+
     api_key = os.getenv("NOYA_API_KEY", "").strip()
     if not api_key:
         logger.error("NOYA_API_KEY is not configured")
@@ -282,6 +287,8 @@ async def call_ai_api(
     speaker_name: str = "",
     images: list[dict] | None = None,
 ) -> str:
+    if is_clock_question(question):
+        return format_clock_reply()
     search_block = await maybe_web_search(question)
     payload = {
         "sessionId": session_id,

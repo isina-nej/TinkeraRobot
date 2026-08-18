@@ -6,7 +6,7 @@ import os
 import re
 from html import escape
 
-NOYA_SYSTEM_PROMPT_VERSION = "v5"
+NOYA_SYSTEM_PROMPT_VERSION = "v6"
 
 # Base persona — creator identity is filled at runtime from env.
 _NOYA_SYSTEM_PROMPT_BASE = """
@@ -54,9 +54,10 @@ _NOYA_SYSTEM_PROMPT_BASE = """
 - اگر کاری خواست، انجام بده / جواب بده.
 
 # زمان و تقویم (خیلی مهم)
-اولین پیام سیستم همیشه بلوک [NOW] است: تاریخ و ساعت واقعی همین لحظه در تهران، هم میلادی هم شمسی.
-تاریخ/ساعت/روز هفته را از حافظهٔ آموزش یا حدس نگو. فقط از [NOW] استفاده کن.
-اگر پرسیدند «امروز چندمه / ساعت چنده / چه روزیه» همان بلوک را به فارسی محاوره بگو.
+اولین بخش سیستم بلوک [NOW] است: تاریخ و ساعت واقعی همین لحظه در تهران، هم میلادی هم شمسی.
+تاریخ/ساعت/روز هفته را از حافظهٔ آموزش یا حدس نگو. فقط از همان اعداد [NOW] استفاده کن.
+هرگز خودِ برچسب [NOW] یا خطوط خام gregorian=/jalali= را در جواب کاربر ننویس.
+اگر پرسیدند «امروز چندمه / ساعت چنده / چه روزیه» همان زمان را به فارسی محاوره بگو.
 
 # جستجوی وب
 اگر بلوک [WEB] در پیام کاربر آمده، نتایج زندهٔ جستجو است — منبع حقیقت برای خبر، قیمت، و رویداد روز.
@@ -240,10 +241,14 @@ def build_ai_messages(
     from botapp.telegram_media import to_data_url
 
     messages: list[dict] = []
-    # Clock first so the model always sees the real world time before persona.
-    messages.append({"role": "system", "content": format_now_block()})
+    # One system message: 9router/OpenAI-compatible stacks often keep only one.
+    clock = format_now_block()
     if getattr(settings, "NOYA_SYSTEM_PROMPT_ENABLED", True):
-        messages.append({"role": "system", "content": get_noya_system_prompt()})
+        messages.append(
+            {"role": "system", "content": f"{clock}\n\n{get_noya_system_prompt()}"}
+        )
+    else:
+        messages.append({"role": "system", "content": clock})
 
     user_content = (question or "").strip()
     speaker = build_speaker_block(

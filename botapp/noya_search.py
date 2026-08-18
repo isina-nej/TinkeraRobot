@@ -20,7 +20,10 @@ _MAX_BLOCK_CHARS = 1800
 _EXPLICIT = (
     "سرچ کن",
     "سرچش کن",
+    "سرچ بزن",
+    "سرچش بزن",
     "جستجو کن",
+    "جستجو بزن",
     "جست‌وجو",
     "گوگل کن",
     "تو گوگل",
@@ -28,6 +31,10 @@ _EXPLICIT = (
     "پیدا کن",
     "search",
     "google",
+)
+_BARE_SEARCH_RE = re.compile(
+    r"^(?:اینو\s+)?(?:سرچ(?:ش)?|جستجو|جست‌وجو|گوگل)\s*(?:کن|بزن|کنش)?[؟?!.]*$",
+    re.IGNORECASE,
 )
 _LIVE = (
     "اخبار",
@@ -81,19 +88,50 @@ def search_enabled() -> bool:
     }
 
 
+def _current_ask(text: str) -> str:
+    raw = (text or "").strip()
+    marker = "[درخواست فعلی]"
+    if marker in raw:
+        raw = raw.rsplit(marker, 1)[-1]
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def extract_search_query(text: str) -> str:
+    """Prefer the live ask; if it's a bare «سرچ بزن», use the replied message."""
+    ask = _current_ask(text)
+    if ask and not _BARE_SEARCH_RE.match(ask):
+        cleaned = re.sub(
+            r"(?:اینو\s+)?(?:سرچ(?:ش)?|جستجو|جست‌وجو|گوگل)\s*(?:کن|بزن|کنش)?",
+            " ",
+            ask,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t,،:.-؟?!")
+        return cleaned or ask
+    match = re.search(
+        r"\[پیام مورد اشاره[^\]]*\]\s*\n(.+?)(?:\n\n|\n\[|$)",
+        text or "",
+        re.DOTALL,
+    )
+    if match:
+        return re.sub(r"\s+", " ", match.group(1)).strip()[:240]
+    return ask
+
+
 def needs_web_search(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return False
-    lowered = raw.casefold()
-    if any(token in lowered for token in _CLOCK_ONLY):
+    ask = _current_ask(raw)
+    haystack = f"{ask}\n{raw}".casefold()
+    if any(token in ask.casefold() for token in _CLOCK_ONLY):
         return False
-    compact = re.sub(r"\s+", " ", lowered)
+    compact = re.sub(r"\s+", " ", ask.casefold())
     if len(compact) <= 24 and any(compact.startswith(p) or compact == p for p in _SKIP_PREFIX):
         return False
-    if any(token in lowered for token in _EXPLICIT):
+    if any(token in haystack for token in _EXPLICIT):
         return True
-    if any(token in lowered for token in _LIVE):
+    if any(token in haystack for token in _LIVE):
         return True
     return False
 
@@ -231,7 +269,10 @@ async def _duckduckgo_lite(client: httpx.AsyncClient, query: str) -> str:
 async def maybe_web_search(question: str) -> str:
     if not search_enabled() or not needs_web_search(question):
         return ""
-    block = await web_search(question)
+    query = extract_search_query(question)
+    if not query:
+        return ""
+    block = await web_search(query)
     if block:
-        logger.info("noya_search_hit qlen=%s", len(question or ""))
+        logger.info("noya_search_hit qlen=%s query=%s", len(question or ""), query[:80])
     return block
